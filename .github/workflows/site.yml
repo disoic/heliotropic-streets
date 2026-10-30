@@ -1,0 +1,76 @@
+name: Site
+
+on:
+  schedule:
+    - cron: '0 2 1 * *'             # 02:00 UTC on the 1st of each month: fresh streets (the hills never change)
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Rebuild the preloaded streets (takes a while)
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Decide what to do
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.rebuild }}" = "false" ]; then
+            # a push only republishes the app, unless nothing has been built yet
+            if git ls-remote --exit-code --heads origin site >/dev/null 2>&1; then echo "rebuild=false" >> "$GITHUB_OUTPUT"; else echo "rebuild=true" >> "$GITHUB_OUTPUT"; fi
+          else
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install tools
+        if: steps.mode.outputs.rebuild == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool
+          npm ci --prefix pipeline
+          pipeline/node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Elevation tiles (kept between builds)
+        if: steps.mode.outputs.rebuild == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .dem-cache
+          key: dem-v1-${{ github.run_id }}
+          restore-keys: dem-v1-
+
+      - name: Build the preloaded streets
+        if: steps.mode.outputs.rebuild == 'true'
+        run: bash pipeline/build.sh
+
+      - name: Keep the streets already online
+        if: steps.mode.outputs.rebuild != 'true'
+        run: |
+          mkdir -p out
+          if git fetch -q --depth 1 origin site; then git archive FETCH_HEAD data | tar -x -C out || true; fi
+
+      - name: Check the new streets in a real browser
+        if: steps.mode.outputs.rebuild == 'true'      # only after a street build; app updates publish right away
+        run: node pipeline/check.js out
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash pipeline/publish.sh
