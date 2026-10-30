@@ -1,0 +1,5 @@
+[
+  { "code": "CH", "name": "Switzerland", "geofabrik": "europe/switzerland" },
+  { "code": "HR", "name": "Croatia", "geofabrik": "europe/croatia" },
+  { "code": "SI", "name": "Slovenia", "geofabrik": "europe/slovenia" }
+]

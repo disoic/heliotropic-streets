@@ -1,0 +1,2000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+/* Startup watchdog. It runs first and on its own, so it can report a copy of this file that was cut short
+   (browsers silently skip a script that ends mid-file) or an app that never started. */
+(function () {
+  function bar(msg) {
+    var el = document.createElement('div');
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:14px;z-index:5000;background:#8a1c12;color:#fff;' +
+      'font:13px/1.45 system-ui,sans-serif;padding:10px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25)';
+    el.textContent = msg; document.body.appendChild(el);
+  }
+  var lastErr = '';
+  window.addEventListener('error', function (e) { if (!window.__hsReady && e.message) lastErr = e.message + (e.lineno ? ' (line ' + e.lineno + ')' : ''); });
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      if (window.__hsReady) return;
+      if (!window.__hsEOF) bar('This copy of Heliotropic Streets is incomplete: the file stops before its end, so the app never starts. ' +
+        'Upload the whole file again. On GitHub it should be about 75 KB and end with </html>.');
+      else bar("Heliotropic Streets didn't start" + (lastErr ? ': ' + lastErr : '.') + ' Try reloading the page.');
+    }, 3000);
+  });
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>Heliotropic Streets</title>
+<meta name="description" content="Find the streets that frame the low sun at sunrise or sunset, on any day, anywhere.">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<!-- coordinates -> IANA time zone, for correct local clock times anywhere -->
+<script src="https://cdn.jsdelivr.net/npm/@photostructure/tz-lookup@11.7.0/tz.js" async onload="window.App&&App.onTzReady()"></script>
+<style>
+  :root{
+    --bg:#faf9f6; --panel:#ffffff; --line:#e7e4dd; --line2:#efece5; --wash:#fdfcf9;
+    --ink:#1b1a17; --mut:#6f6b62; --mut2:#9a958b;
+    --accent:#c2410c; --rise:#e0892a; --set:#9a4fb0;
+    --shadow:0 1px 2px rgba(20,18,12,.04),0 8px 28px rgba(20,18,12,.10);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:"IBM Plex Sans",system-ui,sans-serif;color:var(--ink);background:var(--bg);overflow:hidden;-webkit-font-smoothing:antialiased}
+  #map{position:absolute;inset:0;background:#EEEAE2}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  button{font:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* panel */
+  #panel{position:absolute;z-index:1000;top:14px;left:14px;width:340px;max-width:calc(100vw - 28px);
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+    max-height:calc(100% - 28px);display:flex;flex-direction:column;overflow:hidden}
+  .head{position:relative;padding:14px 44px 10px 16px;border-bottom:1px solid var(--line2)}
+  .title{font-weight:700;font-size:15px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .title .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(194,65,12,.12);align-self:center}
+  .title .area{font-weight:500;color:var(--mut)}
+  .sub{font-size:12px;color:var(--mut);margin-top:4px;line-height:1.45}
+  #collapse{display:none;position:absolute;right:8px;top:9px;width:32px;height:32px;border:0;background:none;border-radius:8px;color:var(--mut);font-size:19px;line-height:1;cursor:pointer}
+  .alwaysOn{padding:10px 16px 12px}
+  .problem{margin:2px 0 10px;padding:8px 10px;border-radius:9px;background:#fdecea;border:1px solid #f5c6c0;color:#8a1c12;font-size:12px;line-height:1.45}
+  .body{padding:2px 16px 16px;overflow-y:auto;border-top:1px solid var(--line2);overscroll-behavior:contain}
+
+  .row{margin-top:14px}
+  .alwaysOn .row{margin-top:2px}
+  .lbl{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:12px;color:var(--mut);font-weight:500;margin-bottom:6px}
+  .lbl .v{color:var(--ink);font-size:12px}
+  .hint{font-size:11px;color:var(--mut2);line-height:1.45;margin-top:5px}
+
+  .dateline{display:flex;gap:8px;align-items:center}
+  input[type=date]{flex:1;min-width:0;font-family:"IBM Plex Mono",monospace;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)}
+  .play{flex:0 0 auto;width:38px;height:34px;border:1px solid var(--line);border-radius:9px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .play:hover{background:#faf7f1;border-color:#d9d5cc}
+  .play svg{width:15px;height:15px}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;background:var(--line);outline:none;margin:8px 0 2px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;border:2px solid var(--accent);cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid var(--accent);cursor:pointer}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .ticks{display:flex;justify-content:space-between;font-size:9.5px;color:var(--mut2);margin-top:2px;font-family:"IBM Plex Mono",monospace}
+  .presets{display:flex;gap:5px;margin-top:9px}
+  .presets button{flex:1;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px 2px;font-size:11.5px;color:var(--mut);cursor:pointer;white-space:nowrap}
+  .presets button:hover{background:#faf7f1}
+  .presets button.on{background:#fbf3ec;color:var(--accent);border-color:#ecd9c8;font-weight:600}
+  .suntimes{display:flex;gap:14px;margin-top:10px;font-size:12px;color:var(--mut);align-items:center;flex-wrap:wrap}
+  .suntimes b{color:var(--ink);font-family:"IBM Plex Mono",monospace;font-weight:500}
+  .suntimes .tz{color:var(--mut2);font-size:11px}
+  .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--mut2)}
+  .sw.rise{background:var(--rise)} .sw.set{background:var(--set)}
+
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;border:0;background:#fff;padding:7px 4px;font-size:12px;color:var(--mut);cursor:pointer;border-right:1px solid var(--line2)}
+  .seg button:last-child{border-right:0}
+  .seg button.on{background:#fbf3ec;color:var(--accent);font-weight:600}
+  details.adjust{margin-top:14px;border-top:1px solid var(--line2);padding-top:10px}
+  details.adjust summary{font-size:12px;color:var(--mut);font-weight:500;cursor:pointer;list-style-position:inside}
+  details.adjust .row:first-of-type{margin-top:8px}
+
+  .count{font-size:13px;color:var(--mut);margin-bottom:6px}
+  .count b{color:var(--ink);font-family:"IBM Plex Mono",monospace;font-weight:500;font-size:14px}
+  .uplist{display:flex;flex-direction:column;gap:6px}
+  .up{display:block;width:100%;text-align:left;border:1px solid var(--line2);background:var(--wash);border-radius:9px;padding:7px 10px;cursor:pointer}
+  .up:hover{border-color:#e6dccb;background:#fdf8f1}
+  .up .when{display:block;font-size:11.5px;color:var(--mut)}
+  .up .what{display:block;font-weight:600;font-size:13px;margin:1px 0;color:var(--ink)}
+  .up .meta{display:block;font-size:11.5px;color:var(--mut)}
+  .up .fam{font-weight:400;color:var(--mut)}
+  .up .qc{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+  .pmore summary{cursor:pointer;color:var(--mut);font-size:12px;margin-top:8px}
+  .pmore p{margin:6px 0 0;color:var(--mut);font-size:11.5px;line-height:1.45}
+
+  .ramp{height:9px;border-radius:5px;background:linear-gradient(90deg,#c81d25,#e4572e 35%,#f29e4c 70%,#e3b22b)}
+  .ramp-lbl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--mut2);margin-top:4px}
+
+  .check{display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;padding:3px 0}
+  .check input{accent-color:var(--accent);width:15px;height:15px}
+  .types{display:grid;grid-template-columns:1fr 1fr;gap:1px 12px}
+
+  .status{font-size:12px;color:var(--ink);line-height:1.5;display:flex;gap:8px;align-items:flex-start}
+  .status .spin{margin-top:3px}
+  .status.err{color:#b42318}
+  .srcbtns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .srcbtns button{flex:1 1 auto;text-align:center;border:1px solid var(--line);border-radius:8px;background:#fff;padding:7px 8px;font-size:12px;cursor:pointer}
+  .srcbtns button:hover:hover{background:#faf7f1;border-color:#d9d5cc}
+  .srcbtns button.primary{border-color:#ecd9c8;background:#fbf3ec;color:var(--accent);font-weight:600}
+  .linkbtn{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;font-size:inherit;text-decoration:underline;text-underline-offset:2px}
+  .spin{flex:0 0 auto;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .note{font-size:11px;color:var(--mut2);line-height:1.5;margin-top:14px;border-top:1px solid var(--line2);padding-top:10px}
+
+  /* popup: the street's sun calendar */
+  .maplibregl-map{font-family:"IBM Plex Sans",system-ui,sans-serif}
+  .hs-pop .maplibregl-popup-content{border-radius:12px;box-shadow:var(--shadow);padding:13px 15px 12px;font-size:12.5px;line-height:1.5;color:var(--ink)}
+  .hs-pop .maplibregl-popup-close-button{width:30px;height:30px;font-size:19px;line-height:1;color:var(--mut);border-radius:8px;right:2px;top:2px}
+  .hs-pop .maplibregl-popup-close-button:hover{background:#f5f2ec}
+  .pn{font-weight:600;font-size:14px;line-height:1.3;padding-right:14px}
+  .pm{color:var(--mut);font-size:12px;margin-top:2px}
+  .pday{margin-top:9px;padding:8px 10px;border-radius:9px;background:var(--wash);border:1px solid var(--line2)}
+  .pday p{margin:0}
+  .pday p+p{margin-top:5px}
+  .pday .none{color:var(--mut)}
+  .pday a,.wins a{color:var(--accent);text-decoration:none;font-weight:600;cursor:pointer}
+  .pday a:hover,.wins a:hover{text-decoration:underline}
+  .strip{display:block;margin-top:10px;cursor:pointer;touch-action:manipulation}
+  .wins{margin-top:6px}
+  .win{display:grid;grid-template-columns:76px 1fr;column-gap:6px;padding:4px 0;border-top:1px solid var(--line2);font-size:12px}
+  .win:first-child{border-top:0}
+  .win .wk{font-weight:600;white-space:nowrap}
+  .win .wr{color:var(--mut)}
+  .win .wb{grid-column:2}
+  .pf{color:var(--mut2);font-size:11px;margin-top:6px}
+  .pday .tnote{color:var(--mut);font-size:11.5px}
+  .tnote .spin{display:inline-block;vertical-align:-1px;margin-right:4px}
+  .sketch{display:block;margin-top:10px}
+
+  /* self-test report */
+  #testOut{position:absolute;z-index:1500;right:14px;bottom:24px;width:380px;max-width:calc(100vw - 28px);max-height:60%;overflow:auto;
+    background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:12px 14px;font-size:12px;line-height:1.5}
+  #testOut h3{margin:0 0 6px;font-size:13px}
+  #testOut .ok{color:#1f7a3a} #testOut .bad{color:#b42318}
+  #testOut li{margin:2px 0}
+  #testOut ul{margin:0;padding-left:16px}
+
+  /* phones: settings collapse into a top sheet, the day stays visible */
+  @media (max-width:560px){
+    #panel{top:8px;left:8px;right:8px;width:auto;max-width:none;max-height:calc(100% - 16px)}
+    #collapse{display:block}
+    #panel.min .body,#panel.min .sub,#panel.min .ticks,#panel.min .suntimes,#panel.min .presets{display:none}
+    #panel.min .alwaysOn{padding-top:8px}
+  }
+  /* keep the map credits visible beside the panel on wide screens */
+  @media (min-width:561px){.maplibregl-ctrl-bottom-left{left:362px}}
+  @media (prefers-reduced-motion:reduce){.spin{animation:none}}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Map of aligned streets"></div>
+
+<div id="panel">
+  <div class="head" id="head">
+    <div class="title"><span class="dot" aria-hidden="true"></span><span>Heliotropic Streets</span><span class="area" id="areaName"></span></div>
+    <div class="sub">Streets that frame the low sun at sunrise or sunset. Tap any street for its sun calendar.</div>
+    <button id="collapse" aria-label="Hide settings" aria-expanded="true">–</button>
+  </div>
+
+  <div class="alwaysOn">
+    <div class="problem" id="problem" role="alert" hidden></div>
+    <div class="row">
+      <div class="lbl"><span>Day</span><span class="v mono" id="dateLabel">—</span></div>
+      <div class="dateline">
+        <input type="date" id="date" aria-label="Date">
+        <button class="play" id="play" title="Play through the year" aria-label="Play through the year">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+      </div>
+      <input type="range" id="doy" min="1" max="365" value="1" aria-label="Day of the year">
+      <div class="ticks" aria-hidden="true"><span>Jan</span><span>Mar</span><span>May</span><span>Jul</span><span>Sep</span><span>Nov</span></div>
+      <div class="presets" id="presets">
+        <button data-p="today">Today</button>
+        <button data-p="tomorrow">Tomorrow</button>
+      </div>
+      <div class="suntimes">
+        <span><i class="sw rise"></i>Sunrise <b id="stRise">—</b></span>
+        <span><i class="sw set"></i>Sunset <b id="stSet">—</b></span>
+        <span class="tz" id="stZone"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="body" id="bodyPanel">
+    <div class="row">
+      <div class="seg" id="look" role="group" aria-label="What counts as aligned">
+        <button data-l="framed" class="on">Framed at the end</button>
+        <button data-l="down">Low sun along it</button>
+      </div>
+      <div class="hint" id="lookHint"></div>
+    </div>
+    <div class="row">
+      <div class="seg" id="mode" role="group" aria-label="Which alignments to show">
+        <button data-m="both" class="on">Both</button>
+        <button data-m="rise">Sunrise</button>
+        <button data-m="set">Sunset</button>
+      </div>
+    </div>
+    <div class="row summary">
+      <div class="count"><b id="roCount">—</b> <span id="roText">streets aligned</span></div>
+      <div class="ramp" aria-hidden="true"></div>
+      <div class="ramp-lbl"><span>Sun on the skyline</span><span id="rampHi">At the street's limit</span></div>
+    </div>
+    <div class="row">
+      <div class="lbl"><span>Coming up</span><span class="v" id="upFrom"></span></div>
+      <div class="uplist" id="upcoming"></div>
+    </div>
+    <details class="adjust">
+      <summary>Settings</summary>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="terrain" checked> Account for hills (elevation data)</label>
+        <div class="hint" id="terrStatus" role="status" aria-live="polite"></div>
+      </div>
+      <div class="row">
+        <div class="lbl"><span>Shortest straight stretch</span><span class="v mono" id="lenLabel">100 m</span></div>
+        <input type="range" id="len" min="50" max="1000" step="10" value="100">
+      </div>
+      <div class="row">
+        <div class="lbl"><span>Street types</span></div>
+        <div class="types" id="types"></div>
+      </div>
+      <div class="row">
+        <div class="lbl"><span>Building height</span><span class="v mono" id="bhLabel">15 m</span></div>
+        <input type="range" id="bh" min="5" max="60" step="1" value="15">
+        <div class="hint">For "framed". It changes streets shorter than about 600 m; longer ones use 1.5°. Raise it for high-rise streets.</div>
+      </div>
+      <div class="row">
+        <div class="lbl"><span>Low-sun limit</span><span class="v mono" id="ceilLabel">6.0° above</span></div>
+        <input type="range" id="ceil" min="1" max="10" step="0.1" value="6">
+        <div class="hint">For "low sun along it": how far above the skyline the sun may stand.</div>
+      </div>
+      <div class="row">
+        <div class="lbl"><span>Minimum skyline</span><span class="v mono" id="skyLabel">0.0°</span></div>
+        <input type="range" id="sky" min="-1" max="8" step="0.1" value="0">
+        <div class="hint">Treat the horizon at the end of every street as at least this high, for example for buildings. Higher hills still count.</div>
+      </div>
+    </details>
+    <div class="row">
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+      <div class="srcbtns">
+        <button id="loadBtn" class="primary" hidden>Load streets in view</button>
+        <button id="retryBtn" hidden>Try again</button>
+      </div>
+      <div class="hint"><span id="covNote"></span>Elsewhere, streets load from OpenStreetMap when you zoom in and stay saved on this device for 30 days. <button class="linkbtn" id="clearCache">Clear saved streets</button></div>
+    </div>
+    <div class="note">Sun positions use the US Naval Observatory algorithm, checked against pyephem to 0.02°. Street data © OpenStreetMap contributors, via the Overpass API. Elevation from the Terrain Tiles by Mapzen, including EU-DEM. Clock times are local to each place. Paths and tracks are left out. Version 3.3.</div>
+  </div>
+</div>
+
+<div id="testOut" hidden></div>
+
+<script id="hs-core">
+/* Heliotropic Streets v2 — pure core (no DOM). Loaded inline in the page; testable in Node. */
+const HS = (() => {
+  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+  const DAY = 86400000, HOUR = 3600000;
+  const SD = 0.2666;      // solar semidiameter, degrees
+  const H_STD = -0.833;   // standard rise/set: centre 50' below the geometric horizon
+
+  /* ---------- solar position: USNO low-precision algorithm (validated vs pyephem, <=0.02 deg) ---------- */
+  function sunEq(t) {                       // t = ms since epoch, UTC
+    const n = t / DAY + 2440587.5 - 2451545.0;
+    const g = ((357.529 + 0.98560028 * n) % 360) * D2R;
+    const q = (280.459 + 0.98564736 * n) % 360;
+    const L = ((q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) % 360) * D2R;
+    const e = (23.439 - 0.00000036 * n) * D2R;
+    return {
+      dec: Math.asin(Math.sin(e) * Math.sin(L)),                       // rad
+      ra: Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)),          // rad
+      gmst: ((280.46061837 + 360.98564736629 * n) % 360 + 360) % 360   // deg
+    };
+  }
+  function hourAngle(t, lon) {              // rad in (-pi, pi], positive = afternoon
+    const s = sunEq(t);
+    const H = (s.gmst + lon) * D2R - s.ra;
+    return { H: Math.atan2(Math.sin(H), Math.cos(H)), dec: s.dec };
+  }
+  function altAz(t, lat, lon) {             // geometric altitude and azimuth (from north, clockwise), degrees
+    const { H, dec } = hourAngle(t, lon), p = lat * D2R;
+    const sh = Math.sin(p) * Math.sin(dec) + Math.cos(p) * Math.cos(dec) * Math.cos(H);
+    const A = Math.atan2(-Math.cos(dec) * Math.sin(H),
+                         Math.cos(p) * Math.sin(dec) - Math.sin(p) * Math.cos(dec) * Math.cos(H));
+    return { alt: Math.asin(Math.max(-1, Math.min(1, sh))) * R2D, az: (A * R2D + 360) % 360 };
+  }
+  // Local apparent noon (UTC ms) on calendar date y-m-d at longitude lon.
+  function transit(y, m, d, lon) {
+    let t = Date.UTC(y, m - 1, d, 12) - lon / 15 * HOUR;
+    for (let i = 0; i < 3; i++) t -= hourAngle(t, lon).H * R2D / 15 * HOUR;
+    return t;
+  }
+  // Everything one local day needs: transit time and declination at both ends (linear in between).
+  function dayParams(y, m, d, lon) {
+    const tr = transit(y, m, d, lon), t0 = tr - 12 * HOUR, t1 = tr + 12 * HOUR;
+    const dp = { y, m, d, lon, tr, t0, t1, dec0: sunEq(t0).dec, dec1: sunEq(t1).dec };
+    dp.sdM = Math.sin(decAt(dp, tr - 6 * HOUR)); dp.sdE = Math.sin(decAt(dp, tr + 6 * HOUR));   // fast first pass
+    return dp;
+  }
+  const decAt = (dp, t) => dp.dec0 + (dp.dec1 - dp.dec0) * (t - dp.t0) / (dp.t1 - dp.t0);
+
+  /* ---------- refraction (standard atmosphere) ---------- */
+  function refr(hTrue) {                    // true -> refraction, deg (Saemundsson)
+    const x = Math.max(hTrue, -1.5);
+    return 1.02 / Math.tan((x + 10.3 / (x + 5.11)) * D2R) / 60;
+  }
+  function app2true(hApp) {                 // apparent -> true, deg (Bennett)
+    const x = Math.max(hApp, -1.0);
+    return hApp - 1 / Math.tan((x + 7.31 / (x + 4.4)) * D2R) / 60;
+  }
+  const true2app = h => h + refr(h);
+
+  /* ---------- sunrise / sunset (analytic, refined) ---------- */
+  // Returns {rise:{t,az}|null, set:{t,az}|null, polar:'day'|'night'|null} for true altitude h0.
+  function riseSet(dp, lat, lon, h0 = H_STD) {
+    const p = lat * D2R, sh0 = Math.sin(h0 * D2R), trL = dp.tr + (dp.lon - lon) / 15 * HOUR;
+    const out = { rise: null, set: null, polar: null };
+    for (const sign of [-1, 1]) {
+      let t = trL + sign * 6 * HOUR, ok = true;
+      for (let i = 0; i < 3; i++) {
+        const dec = decAt(dp, t);
+        const c = (sh0 - Math.sin(p) * Math.sin(dec)) / (Math.cos(p) * Math.cos(dec));
+        if (c < -1) { out.polar = 'day'; ok = false; break; }
+        if (c > 1) { out.polar = 'night'; ok = false; break; }
+        t = trL + sign * Math.acos(c) * R2D / 15 * HOUR;
+      }
+      if (!ok) continue;
+      const dec = decAt(dp, t);
+      let cA = (Math.sin(dec) - Math.sin(p) * sh0) / (Math.cos(p) * Math.cos(h0 * D2R));
+      const A = Math.acos(Math.max(-1, Math.min(1, cA))) * R2D;
+      out[sign < 0 ? 'rise' : 'set'] = { t, az: sign < 0 ? A : 360 - A };
+    }
+    return out;
+  }
+
+  /* ---------- the crossing-altitude model ----------
+     For a look direction beta, the sun's diurnal circle meets the vertical circle at azimuth beta where
+       sin(dec) = sin(phi) sin(h) + cos(phi) cos(h) cos(beta)  =>  r sin(h + psi) = sin(dec)
+     with r = hypot(sin phi, cos phi cos beta), psi = atan2(cos phi cos beta, sin phi).
+     A street is aligned when that altitude lies inside the band [skyline, ceiling]. */
+  function dirConst(lat, beta) {
+    const p = lat * D2R, b = beta * D2R;
+    const A = Math.sin(p), B = Math.cos(p) * Math.cos(b);
+    return { r: Math.hypot(A, B), psi: Math.atan2(B, A), sinB: Math.sin(b), cosB: Math.cos(b) };
+  }
+  const TAU = 2 * Math.PI;
+  function wrapPi(x) { while (x > Math.PI) x -= TAU; while (x <= -Math.PI) x += TAU; return x; }
+  // Events for one look direction on one day. band = {lo, hi} TRUE altitudes in degrees.
+  // run needs sinP, cosP, lon and the per-direction constants (r0/psi0/sb0, r1/psi1/sb1).
+  // Pushes {k, h (true deg), t (ms), H (deg)} into out.
+  function dirEvents(run, k, dp, band, out) {
+    const r = k ? run.r1 : run.r0, psi = k ? run.psi1 : run.psi0, sinB = k ? run.sb1 : run.sb0;
+    const lo = band.lo * D2R, hi = band.hi * D2R, margin = 0.6 * D2R;
+    let s = (sinB >= 0 ? dp.sdM : dp.sdE) / r;
+    if (s > 1 || s < -1) return out;
+    const as = Math.asin(s), trL = dp.tr + (dp.lon - run.lon) / 15 * HOUR;
+    const dec = decAt(dp, trL + (sinB >= 0 ? -6 : 6) * HOUR);
+    for (let j = 0; j < 2; j++) {
+      let h = wrapPi(j === 0 ? as - psi : Math.PI - as - psi);
+      if (h < lo - margin || h > hi + margin || h > Math.PI / 2 || h < -Math.PI / 2) continue;
+      let t = 0, H = 0, d = dec;
+      for (let it = 0; it < 2; it++) {                         // refine declination at the event time
+        const cd = Math.cos(d);
+        H = Math.atan2(-sinB * Math.cos(h) / cd, (Math.sin(h) - run.sinP * Math.sin(d)) / (run.cosP * cd));
+        t = trL + H * R2D / 15 * HOUR;
+        d = decAt(dp, t);
+        s = Math.sin(d) / r;
+        if (s > 1 || s < -1) { h = NaN; break; }
+        const a2 = Math.asin(s);
+        h = wrapPi(j === 0 ? a2 - psi : Math.PI - a2 - psi);
+      }
+      if (!(h >= lo && h <= hi)) continue;
+      const cd = Math.cos(d);
+      H = Math.atan2(-sinB * Math.cos(h) / cd, (Math.sin(h) - run.sinP * Math.sin(d)) / (run.cosP * cd));
+      out.push({ k, h: h * R2D, t: trL + H * R2D / 15 * HOUR, H: H * R2D });
+    }
+    return out;
+  }
+  // Event closest to the skyline for a run on a day, honouring mode: 'both' | 'rise' | 'set'.
+  const _evs = [];
+  function bestEvent(run, dp, band, mode) {           // band: one for both directions, or [sunrise side, sunset side]
+    const b0 = Array.isArray(band) ? band[0] : band, b1 = Array.isArray(band) ? band[1] : band;
+    _evs.length = 0;
+    if (mode !== 'set') dirEvents(run, 0, dp, b0, _evs);
+    if (mode !== 'rise') dirEvents(run, 1, dp, b1, _evs);
+    if (!_evs.length) return null;
+    let best = null;
+    for (const e of _evs) {
+      const rising = e.H < 0;
+      if ((mode === 'rise' && !rising) || (mode === 'set' && rising)) continue;
+      if (!best || e.h < best.h) best = e;
+    }
+    return best;
+  }
+  // Azimuth arcs swept by the sun while inside the band (for the compass). Returns [{from,to,rising}]
+  function bandArcs(dp, lat, band) {
+    const p = lat * D2R, arcs = [];
+    for (const rising of [true, false]) {
+      const t = dp.tr + (rising ? -6 : 6) * HOUR, dec = decAt(dp, t);
+      let mn = Infinity, mx = -Infinity;
+      for (let i = 0; i <= 16; i++) {
+        const h = (band.lo + (band.hi - band.lo) * i / 16) * D2R;
+        const c = (Math.sin(dec) - Math.sin(p) * Math.sin(h)) / (Math.cos(p) * Math.cos(h));
+        if (c < -1 || c > 1) continue;
+        // only altitudes the sun actually reaches today
+        const hUp = Math.PI / 2 - Math.abs(p - dec), hDown = Math.abs(p + dec) - Math.PI / 2;
+        if (h > hUp || h < hDown) continue;
+        const A = Math.acos(c) * R2D, az = rising ? A : 360 - A;
+        mn = Math.min(mn, az); mx = Math.max(mx, az);
+      }
+      if (mn <= mx) arcs.push({ from: mn, to: mx, rising });
+    }
+    return arcs;
+  }
+
+  /* ---------- geometry: straight runs from OSM ways ---------- */
+  function kLat(phi) { const p = phi * D2R; return 111132.954 - 559.822 * Math.cos(2 * p) + 1.175 * Math.cos(4 * p); }
+  function kLon(phi) { const p = phi * D2R; return 111412.84 * Math.cos(p) - 93.5 * Math.cos(3 * p) + 0.118 * Math.cos(5 * p); }
+  function segDist(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    let u = L2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    return Math.hypot(px - ax - u * dx, py - ay - u * dy);
+  }
+  // Douglas-Peucker on local metric coordinates; returns kept indices (ascending).
+  function simplify(xs, ys, eps) {
+    const n = xs.length, keep = new Uint8Array(n);
+    keep[0] = keep[n - 1] = 1;
+    const st = [0, n - 1];
+    while (st.length) {
+      const b = st.pop(), a = st.pop();
+      let md = -1, mi = -1;
+      for (let i = a + 1; i < b; i++) {
+        const d = segDist(xs[i], ys[i], xs[a], ys[a], xs[b], ys[b]);
+        if (d > md) { md = d; mi = i; }
+      }
+      if (md > eps) { keep[mi] = 1; st.push(a, mi, mi, b); }
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
+    return out;
+  }
+  function bearing(lon1, lat1, lon2, lat2) {            // deg from north, local ellipsoid scales
+    const pm = (lat1 + lat2) / 2;
+    const dx = (lon2 - lon1) * kLon(pm), dy = (lat2 - lat1) * kLat(pm);
+    return { az: (Math.atan2(dx, dy) * R2D + 360) % 360, len: Math.hypot(dx, dy) };
+  }
+  function makeRun(lonA, latA, lonB, latB, len, az, name, names, group, hw) {
+    const theta = az % 180, latM = (latA + latB) / 2, lonM = (lonA + lonB) / 2, p = latM * D2R;
+    const sp = Math.sin(p), cp = Math.cos(p), tb = theta * D2R, sb = Math.sin(tb), cb = Math.cos(tb);
+    // direction 0 looks along theta (east half: sunrise side), direction 1 along theta+180 (sunset side)
+    const B0 = cp * cb, B1 = -cp * cb;
+    return {
+      lon1: lonA, lat1: latA, lon2: lonB, lat2: latB, lat: latM, lon: lonM,
+      len, theta, sinP: sp, cosP: cp,
+      r0: Math.hypot(sp, B0), psi0: Math.atan2(B0, sp), sb0: sb,
+      r1: Math.hypot(sp, B1), psi1: Math.atan2(B1, sp), sb1: -sb,
+      name, names, group, hw,
+      minLon: lonA < lonB ? lonA : lonB, maxLon: lonA < lonB ? lonB : lonA,
+      minLat: latA < latB ? latA : latB, maxLat: latA < latB ? latB : latA, ev: null
+    };
+  }
+  // Straight pieces of one way (Douglas-Peucker in local metres), cached on the way object.
+  function wayPieces(w, EPS) {
+    if (w._pcs) return w._pcs;
+    const c = w.c, n = c.length / 2, pcs = [];
+    if (n >= 2) {
+      const lat0 = c[1] / 1e7, lon0 = c[0] / 1e7, kx = kLon(lat0), ky = kLat(lat0);
+      const xs = new Float64Array(n), ys = new Float64Array(n);
+      for (let i = 0; i < n; i++) { xs[i] = (c[2 * i] / 1e7 - lon0) * kx; ys[i] = (c[2 * i + 1] / 1e7 - lat0) * ky; }
+      const idx = simplify(xs, ys, EPS);
+      const key = i => w.ids ? w.ids[i] : 'c' + c[2 * i] + ',' + c[2 * i + 1];
+      for (let j = 0; j + 1 < idx.length; j++) {
+        const i0 = idx[j], i1 = idx[j + 1];
+        const bg = bearing(c[2 * i0] / 1e7, c[2 * i0 + 1] / 1e7, c[2 * i1] / 1e7, c[2 * i1 + 1] / 1e7);
+        if (bg.len < 0.5) continue;
+        pcs.push({ i0, i1, az: bg.az, len: bg.len, k0: key(i0), k1: key(i1), run: undefined });
+      }
+    }
+    return (w._pcs = pcs);
+  }
+  // Prepare a way ahead of time (pieces + their stand-alone runs) so later rebuilds only stitch.
+  function prepWay(w, opt = {}) {
+    const EPS = opt.eps ?? 3, MINLEN = opt.minKeep ?? 25, pcs = wayPieces(w, EPS), c = w.c;
+    for (const pc of pcs) if (pc.run === undefined)
+      pc.run = pc.len < MINLEN ? null : makeRun(c[2 * pc.i0] / 1e7, c[2 * pc.i0 + 1] / 1e7, c[2 * pc.i1] / 1e7, c[2 * pc.i1 + 1] / 1e7,
+        pc.len, pc.az, w.name || '', null, w.group, w.hw);
+    return pcs;
+  }
+  // ways: [{id, hw, group, name, ids: number[]|null, c: Int32Array [lon,lat]*1e7}]
+  let chainCache = new Map();
+  function buildRuns(ways, opt = {}) {
+    const EPS = opt.eps ?? 3, MERGE = opt.mergeDeg ?? 4, MINLEN = opt.minKeep ?? 25;
+    const prevCache = chainCache, nextCache = new Map();
+    // 1) straight pieces inside each way
+    const P_w = [], P_pc = [];
+    for (let wi = 0; wi < ways.length; wi++) {
+      const pcs = prepWay(ways[wi], opt);
+      for (const pc of pcs) { P_w.push(wi); P_pc.push(pc); }
+    }
+    const NP = P_pc.length, nb = new Int32Array(2 * NP).fill(-1);
+    // 2) pair pieces that continue straight through a shared node
+    const ends = new Map();
+    for (let p = 0; p < NP; p++) {
+      for (let e = 0; e < 2; e++) {
+        const key = e ? P_pc[p].k1 : P_pc[p].k0, v = p * 2 + e, a = ends.get(key);
+        if (a === undefined) ends.set(key, v);
+        else if (typeof a === 'number') ends.set(key, [a, v]);
+        else a.push(v);
+      }
+    }
+    const cand = [];
+    for (const list of ends.values()) {
+      if (typeof list === 'number') continue;
+      for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+        const pa = list[i] >> 1, ea = list[i] & 1, pb = list[j] >> 1, eb = list[j] & 1;
+        if (pa === pb) continue;
+        const oa = ea ? (P_pc[pa].az + 180) % 360 : P_pc[pa].az;
+        const ob = eb ? (P_pc[pb].az + 180) % 360 : P_pc[pb].az;
+        let d = Math.abs(oa - ob) % 360; if (d > 180) d = 360 - d;
+        const dev = 180 - d;
+        if (dev < MERGE) cand.push(dev, list[i], list[j]);
+      }
+    }
+    const order = []; for (let i = 0; i < cand.length; i += 3) order.push(i);
+    order.sort((a, b) => cand[a] - cand[b]);
+    for (const i of order) {
+      const A = cand[i + 1], B = cand[i + 2];
+      if (nb[A] !== -1 || nb[B] !== -1) continue;
+      nb[A] = B; nb[B] = A;
+    }
+    // 3) walk chains, concatenate, re-simplify, emit final runs
+    const seen = new Uint8Array(NP), runs = [];
+    const walk = (start, startEnd) => {
+      const chain = []; let p = start, enterEnd = startEnd;
+      while (p !== -1 && !seen[p]) {
+        seen[p] = 1; const fwd = enterEnd === 0; chain.push(p, fwd ? 1 : 0);
+        const nx = nb[p * 2 + (fwd ? 1 : 0)];
+        if (nx === -1) break;
+        p = nx >> 1; enterEnd = nx & 1;
+      }
+      return chain;
+    };
+    const emit = chain => {
+      if (chain.length === 2) { const r = P_pc[chain[0]].run; if (r) runs.push(r); return; }   // single straight piece
+      const p0 = chain[0], pl = chain[chain.length - 2];
+      const key = ways[P_w[p0]].id + '/' + P_pc[p0].i0 + '/' + chain[1] + '/' + ways[P_w[pl]].id + '/' + P_pc[pl].i1 + '/' + chain.length;
+      const hit = prevCache.get(key);
+      if (hit) { nextCache.set(key, hit); for (const r of hit) runs.push(r); return; }
+      const before = runs.length;
+      emitNew(chain);
+      nextCache.set(key, runs.slice(before));
+    };
+    const emitNew = chain => {
+      const lon = [], lat = [], edgeP = [];
+      for (let q = 0; q < chain.length; q += 2) {
+        const p = chain[q], fwd = chain[q + 1] === 1, pc = P_pc[p], c = ways[P_w[p]].c;
+        const n = pc.i1 - pc.i0;
+        for (let s = 0; s <= n; s++) {
+          if (lon.length && s === 0) continue;
+          const i = fwd ? pc.i0 + s : pc.i1 - s;
+          lon.push(c[2 * i] / 1e7); lat.push(c[2 * i + 1] / 1e7);
+          if (lon.length > 1) edgeP.push(p);
+        }
+      }
+      const n = lon.length; if (n < 2) return;
+      const kx = kLon(lat[0]), ky = kLat(lat[0]), xs = new Float64Array(n), ys = new Float64Array(n);
+      for (let i = 0; i < n; i++) { xs[i] = (lon[i] - lon[0]) * kx; ys[i] = (lat[i] - lat[0]) * ky; }
+      const idx = simplify(xs, ys, EPS);
+      for (let j = 0; j + 1 < idx.length; j++) {
+        const a = idx[j], b = idx[j + 1];
+        const bg = bearing(lon[a], lat[a], lon[b], lat[b]);
+        if (bg.len < MINLEN) continue;
+        const wName = new Map(), wGroup = new Map(), wHw = new Map();
+        for (let e = a; e < b; e++) {
+          const w = ways[P_w[edgeP[e]]], L = Math.hypot(xs[e + 1] - xs[e], ys[e + 1] - ys[e]);
+          if (w.name) wName.set(w.name, (wName.get(w.name) || 0) + L);
+          wGroup.set(w.group, (wGroup.get(w.group) || 0) + L);
+          wHw.set(w.hw, (wHw.get(w.hw) || 0) + L);
+        }
+        const top = m => { let best = '', bv = -1; for (const [k, v] of m) if (v > bv) { bv = v; best = k; } return best; };
+        runs.push(makeRun(lon[a], lat[a], lon[b], lat[b], bg.len, bg.az, top(wName), wName.size > 1 ? [...wName.keys()] : null,
+          top(wGroup), top(wHw)));
+      }
+    };
+    for (let p = 0; p < NP; p++) {                    // open chains first (start at a free end)
+      if (seen[p]) continue;
+      if (nb[2 * p] === -1) emit(walk(p, 0));
+      else if (nb[2 * p + 1] === -1) emit(walk(p, 1));
+    }
+    for (let p = 0; p < NP; p++) if (!seen[p]) emit(walk(p, 0));   // closed loops
+    chainCache = nextCache;
+    return runs;
+  }
+  function resetRunCache() { chainCache = new Map(); }
+  // A zero-length probe run at a point with a given orientation (tests, sun-calendar of a direction)
+  const probeRun = (lat, lon, theta) => makeRun(lon, lat, lon, lat, 0, ((theta % 180) + 180) % 180, '', null, '', '');
+
+  /* ---------- calendar for one run ---------- */
+  const isLeap = y => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const daysIn = y => isLeap(y) ? 366 : 365;
+  function dateOfDoy(y, doy) { const d = new Date(Date.UTC(y, 0, doy)); return { y, m: d.getUTCMonth() + 1, d: d.getUTCDate() }; }
+  function doyOf(y, m, d) { return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / DAY) + 1; }
+  // Returns per direction k: array[doy] = lowest event or null, plus windows [{k, from, to, lows:[doy..]}]
+  function runCalendar(run, y, band) {
+    const bands = Array.isArray(band) ? band : [band, band];      // one band per look direction (terrain differs)
+    const N = daysIn(y), days = [new Array(N + 1).fill(null), new Array(N + 1).fill(null)];
+    for (let doy = 1; doy <= N; doy++) {
+      const dt = dateOfDoy(y, doy), dp = dayParams(y, dt.m, dt.d, run.lon);
+      for (const k of [0, 1]) {
+        const evs = dirEvents(run, k, dp, bands[k], []);
+        for (const e of evs) if (!days[k][doy] || e.h < days[k][doy].h) days[k][doy] = e;
+      }
+    }
+    const windows = [];
+    for (const k of [0, 1]) {
+      let d = 1;
+      while (d <= N) {
+        if (!days[k][d]) { d++; continue; }
+        let e = d; while (e + 1 <= N && days[k][e + 1]) e++;
+        const lows = [], tgt = bands[k].target ?? bands[k].lo, f = i => Math.abs(days[k][i].h - tgt);
+        for (let i = d; i <= e; i++) {
+          const v = f(i), vp = i > d ? f(i - 1) : Infinity, vn = i < e ? f(i + 1) : Infinity;
+          if (v <= vp && v < vn) lows.push(i);
+        }
+        windows.push({ k, from: d, to: e, lows: lows.slice(0, 2) });
+        d = e + 1;
+      }
+    }
+    // a window touching 31 Dec and one starting 1 Jan are the same season: keep both, the UI shows dates.
+    return { N, days, windows };
+  }
+
+  /* ---------- terrain horizon (pure geometry; the app supplies ground heights) ---------- */
+  const R_EARTH = 6371008.8, K_REFR = 0.13, EYE = 1.7;
+  function destPoint(lat, lon, az, d) {
+    const p1 = lat * D2R, th = az * D2R, dl = d / R_EARTH;
+    const p2 = Math.asin(Math.sin(p1) * Math.cos(dl) + Math.cos(p1) * Math.sin(dl) * Math.cos(th));
+    const l2 = lon * D2R + Math.atan2(Math.sin(th) * Math.sin(dl) * Math.cos(p1), Math.cos(dl) - Math.sin(p1) * Math.sin(p2));
+    return { lat: p2 * R2D, lon: ((l2 * R2D + 540) % 360) - 180 };
+  }
+  // where to read the ground along a ray: every 20 m near the street, every 300 m far away (metres)
+  const RAY_D = (() => {
+    const D = [];
+    for (let d = 60; d < 1000; d += 20) D.push(d);
+    for (let d = 1000; d < 4000; d += 40) D.push(d);
+    for (let d = 4000; d < 25000; d += 100) D.push(d);
+    for (let d = 25000; d <= 160000; d += 400) D.push(d);
+    return D;
+  })();
+  const rayZoom = d => d < 4000 ? 12 : d < 25000 ? 10 : 8;     // terrain tile zoom used at distance d
+  // Highest apparent angle (deg) along a ray, allowing for the Earth's curve and for light bending near the ground.
+  // elev[i] = ground height at D[i] (NaN = unknown), hEye = observer's eye height. The first 1.5 km is lightly
+  // smoothed because a few metres of DEM error close by is several degrees.
+  const CURV = (1 - K_REFR) / (2 * R_EARTH);
+  function rayHorizon(D, elev, hEye) {            // compares slopes and takes one arctangent at the end (fast)
+    let best = -Infinity, at = 0;
+    for (let i = 0; i < D.length; i++) {
+      let h = elev[i];
+      if (D[i] < 1500 && i > 0 && i + 1 < D.length && isFinite(elev[i - 1]) && isFinite(elev[i + 1])) h = (elev[i - 1] + h + elev[i + 1]) / 3;
+      if (!isFinite(h)) continue;
+      const d = D[i], r = (h - hEye - d * d * CURV) / d;
+      if (r > best) { best = r; at = d; }
+    }
+    return { ang: best === -Infinity ? NaN : Math.atan(best) * R2D, dist: at };
+  }
+  const terrarium = (r, g, b) => r * 256 + g + b / 256 - 32768;
+
+  /* ---------- street filters, shared by the app and the GitHub build ---------- */
+  const EXCLUDE_HW = 'footway|cycleway|steps|construction|proposed|raceway|bus_guideway|corridor|platform|elevator|escalator|bridleway|via_ferrata|abandoned|disused|razed|services|rest_area|bus_stop|emergency_bay|path|track';
+  const EXCLUDE_RE = new RegExp('^(' + EXCLUDE_HW + ')$'), TUNNEL_RE = /^(yes|building_passage|culvert|avalanche_protector|flooded)$/;
+  const TYPE_GROUPS = {
+    Major: ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link'],
+    Secondary: ['secondary', 'secondary_link', 'tertiary', 'tertiary_link'],
+    Residential: ['residential', 'living_street', 'unclassified', 'road', 'pedestrian'],
+    Service: ['service']
+  };
+  const HW_LIST = [].concat(TYPE_GROUPS.Major, TYPE_GROUPS.Secondary, TYPE_GROUPS.Residential, TYPE_GROUPS.Service);
+  function classify(hw) { for (const g in TYPE_GROUPS) if (TYPE_GROUPS[g].includes(hw)) return g; return 'Residential'; }
+  function keepWay(tg) {
+    const hw = tg.highway;
+    return !!hw && !EXCLUDE_RE.test(hw) && tg.area !== 'yes' && !TUNNEL_RE.test(tg.tunnel || '') && tg.covered !== 'yes' && tg.indoor !== 'yes';
+  }
+
+  /* ---------- terrain sampling from Terrarium tiles, shared by the app and the GitHub build ----------
+     getTile(key) returns a decoded tile (Float32Array of 256 x 256 heights) or nothing. */
+  function makeTerrain(getTile) {
+    const NZ = []; for (let z = 0; z <= 15; z++) NZ[z] = 256 * Math.pow(2, z);
+    const RAYZ = RAY_D.map(rayZoom), EL = new Float64Array(RAY_D.length);
+    const dk = (z, x, y) => (z * 65536 + x) * 65536 + y;
+    const keyName = key => `${Math.floor(key / 4294967296)}/${Math.floor(key / 65536) % 65536}/${key % 65536}`;
+    const mercY = lat => { const r = Math.max(-85.0511, Math.min(85.0511, lat)) * D2R; return (1 - Math.log(Math.tan(Math.PI / 4 + r / 2)) / Math.PI) / 2; };
+    function tileKeyAt(lat, lon, z) {
+      const N = NZ[z] / 256, tx = Math.floor((lon + 180) / 360 * N), ty = Math.floor(mercY(lat) * N);
+      return dk(z, ((tx % N) + N) % N, Math.max(0, Math.min(N - 1, ty)));
+    }
+    function sampleAt(px, py, t) {                 // bilinear inside one tile; px, py in global pixels
+      const tx = Math.floor(px / 256), ty = Math.floor(py / 256);
+      const fx = Math.max(0, Math.min(255, px - tx * 256 - 0.5)), fy = Math.max(0, Math.min(255, py - ty * 256 - 0.5));
+      const x0 = fx | 0, y0 = fy | 0, x1 = x0 < 255 ? x0 + 1 : 255, y1 = y0 < 255 ? y0 + 1 : 255, ax = fx - x0, ay = fy - y0;
+      return (t[y0 * 256 + x0] * (1 - ax) + t[y0 * 256 + x1] * ax) * (1 - ay) + (t[y1 * 256 + x0] * (1 - ax) + t[y1 * 256 + x1] * ax) * ay;
+    }
+    function demAt(lat, lon, z) {
+      const t = getTile(tileKeyAt(lat, lon, z)); if (!t) return NaN;
+      return sampleAt((lon + 180) / 360 * NZ[z], mercY(lat) * NZ[z], t);
+    }
+    // Steps straight across Web Mercator (a rhumb line), within a few hundred metres of the great circle over 160 km.
+    function rayWalk(lat, lon, az, visit) {
+      const s = Math.sin(az * D2R), co = Math.cos(az * D2R), k = 1 / (Math.cos(lat * D2R) * 2 * Math.PI * 6378137);
+      const mx0 = (lon + 180) / 360, my0 = mercY(lat);
+      for (let i = 0; i < RAY_D.length; i++) {
+        const z = RAYZ[i], n = NZ[z], N = n / 256, px = (mx0 + RAY_D[i] * s * k) * n, py = (my0 - RAY_D[i] * co * k) * n;
+        const tx = Math.floor(px / 256), ty = Math.floor(py / 256);
+        visit(i, px, py, dk(z, ((tx % N) + N) % N, ty));
+      }
+    }
+    function rayTiles(lat, lon, az, set) { let last = -1; rayWalk(lat, lon, az, (i, px, py, key) => { if (key !== last) { set.add(key); last = key; } }); }
+    function horizonAt(lat, lon, az) {             // {ang (apparent deg), dist (m)} or null without ground data here
+      const h0 = demAt(lat, lon, 12); if (!isFinite(h0)) return null;
+      let last = -1, t = null;
+      rayWalk(lat, lon, az, (i, px, py, key) => {
+        if (key !== last) { last = key; t = getTile(key) || null; }
+        if (!t) { EL[i] = NaN; return; }
+        const v = sampleAt(px, py, t); EL[i] = v > 0 ? v : 0;     // over the sea the water surface is the horizon
+      });
+      const r = rayHorizon(RAY_D, EL, Math.max(0, h0) + EYE);
+      return isFinite(r.ang) ? r : null;
+    }
+    return { dk, keyName, mercY, tileKeyAt, demAt, rayTiles, horizonAt };
+  }
+  // You stand at the end that lets you look along the street toward the sun.
+  function observerEnd(run, look) {
+    const dx = (run.lon2 - run.lon1) * Math.cos(run.lat * D2R), dy = run.lat2 - run.lat1;
+    return dx * Math.sin(look * D2R) + dy * Math.cos(look * D2R) >= 0 ? 1 : 2;
+  }
+  function obsOf(run, k) {
+    const look = (k ? run.theta + 180 : run.theta) % 360, end = observerEnd(run, look);
+    return { lat: end === 1 ? run.lat1 : run.lat2, lon: end === 1 ? run.lon1 : run.lon2, look };
+  }
+  // Can look direction k ever meet the sun between true altitudes lo and hi (deg) on some day of the year?
+  function canAlign(run, k, lo, hi) {
+    const r = k ? run.r1 : run.r0, psi = k ? run.psi1 : run.psi0, L = lo * D2R, U = hi * D2R, Q = Math.PI / 2;
+    for (let d = -23.5; d <= 23.51; d += 0.5) {
+      const s = Math.sin(d * D2R) / r; if (s > 1 || s < -1) continue;
+      const as = Math.asin(s), h1 = wrapPi(as - psi), h2 = wrapPi(Math.PI - as - psi);
+      if ((h1 >= L && h1 <= U && Math.abs(h1) <= Q) || (h2 >= L && h2 <= U && Math.abs(h2) <= Q)) return true;
+    }
+    return false;
+  }
+
+  function cardinal(az) {
+    const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    return dirs[Math.round((((az % 360) + 360) % 360) / 22.5) % 16];
+  }
+
+  return { D2R, R2D, DAY, HOUR, SD, H_STD, sunEq, hourAngle, altAz, transit, dayParams, decAt, refr, app2true, true2app,
+    riseSet, dirConst, dirEvents, bestEvent, bandArcs, kLat, kLon, simplify, bearing, buildRuns, prepWay,
+    isLeap, daysIn, dateOfDoy, doyOf, runCalendar, cardinal, resetRunCache, probeRun,
+    destPoint, RAY_D, rayZoom, rayHorizon, terrarium, EYE, makeRun, makeTerrain, observerEnd, obsOf, canAlign,
+    EXCLUDE_HW, TYPE_GROUPS, HW_LIST, classify, keepWay };
+})();
+if (typeof module !== "undefined") module.exports = HS;
+
+</script>
+<script>
+window.App = (() => {
+'use strict';
+/* ============================ constants ============================ */
+const $ = id => document.getElementById(id);
+const D2R = HS.D2R, R2D = HS.R2D, HOUR = HS.HOUR, DAYMS = HS.DAY;
+const TILE_Z = 13;            // ~3.3 km tiles at 47° N
+const AUTO_MAX = 48;          // load automatically when a view needs at most this many new tiles (zoom >= Z_AUTO)
+const Z_AUTO = 12, Z_HINT = 10; // MapLibre zoom: auto-load from street scale, ask to zoom in below town scale
+const MANUAL_MAX = 120;       // beyond this, ask the user to zoom in
+const WORKERS = 2;            // parallel Overpass requests (public servers allow ~2 per user)
+const KEEP_TILES = 240;       // tiles kept in memory before the farthest are dropped
+const CACHE_VER = 'v2.1', CACHE_DAYS = 30, CACHE_LIMIT = 800;
+const MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+const EXCLUDE_HW = HS.EXCLUDE_HW, TYPE_GROUPS = HS.TYPE_GROUPS, classify = HS.classify, keepWay = HS.keepWay;   // shared with the build
+const GROUP_KEY = { Major: 'M', Secondary: 'S', Residential: 'R', Service: 'V' };
+const GROUP_LABEL = { Major: 'Major roads', Secondary: 'Secondary roads', Residential: 'Residential streets', Service: 'Service roads' };
+const HW_LABEL = { motorway: 'Motorway', trunk: 'Trunk road', primary: 'Primary road', secondary: 'Secondary road',
+  tertiary: 'Tertiary road', residential: 'Residential street', living_street: 'Living street', unclassified: 'Minor road',
+  road: 'Road', pedestrian: 'Pedestrian street', service: 'Service road', track: 'Track', path: 'Path', street: 'Street' };
+const COARSE = matchMedia('(pointer:coarse)').matches;
+const PHONE = () => window.innerWidth <= 560;
+const DEFAULT_VIEW = { lat: 45.8131, lng: 15.9775, z: 13 };     // central Zagreb
+const WIDTHS = [2.2, 3.2, 4.4];
+// Sun height when centred on the street: 0 = on the skyline (red) ... 1 = at the low-sun limit (gold)
+const STOPS = [[0, '#c81d25'], [0.35, '#e4572e'], [0.7, '#f29e4c'], [1, '#e3b22b']];
+const RAMP = ['interpolate', ['linear'], ['get', 'q'], ...STOPS.flat()];
+function rampCol(q) {
+  q = Math.max(0, Math.min(1, q));
+  for (let i = 1; i < STOPS.length; i++) if (q <= STOPS[i][0] || i === STOPS.length - 1) {
+    const [q0, c0] = STOPS[i - 1], [q1, c1] = STOPS[i], f = (q - q0) / (q1 - q0);
+    const h = (c, k) => parseInt(c.slice(1 + 2 * k, 3 + 2 * k), 16);
+    return '#' + [0, 1, 2].map(k => Math.round(h(c0, k) + (h(c1, k) - h(c0, k)) * f).toString(16).padStart(2, '0')).join('');
+  }
+}
+// line width by zoom; `w` is set per street from its straight length, `add` widens the selection casing
+const WIDTH = add => ['interpolate', ['exponential', 1.5], ['zoom'],
+  10, ['+', add * 0.6, ['*', 0.35, ['get', 'w']]],
+  13, ['+', add * 0.85, ['*', 0.7, ['get', 'w']]],
+  15, ['+', add, ['get', 'w']],
+  18, ['+', add, ['*', 1.8, ['get', 'w']]]];
+const WORDS = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast',
+  SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest',
+  W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
+
+/* ============================ state ============================ */
+const now = new Date();
+const S = { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate(), mode: 'both', look: 'framed', bh: 15, sky: 0, lim: 6, terrain: true, minLen: 100,
+  types: { Major: true, Secondary: true, Residential: true, Service: true } };
+let RUNS = [], ALIGNED = 0, DAYP = null, BAND = null, lastLon = null;
+const WAYS = new Map(), tiles = new Map();
+let queue = [], workers = 0, mirror = 0, failStreak = 0, paused = false, manualList = null;
+let selected = null, popup = null, popBody = null, anim = null, lastErr = '', mapReady = false;
+
+/* ============================ small helpers ============================ */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pad = n => String(n).padStart(2, '0');
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const hostOf = u => { try { return new URL(u).host; } catch (e) { return u; } };
+const word = az => WORDS[HS.cardinal(az)];
+function hwLabel(hw) { if (/_link$/.test(hw)) return 'Slip road'; return HW_LABEL[hw] || (hw ? hw[0].toUpperCase() + hw.slice(1).replace(/_/g, ' ') : 'Street'); }
+function fmtLen(m) { return m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 2).replace(/\.?0+$/, '') + ' km' : Math.round(m) + ' m'; }
+function fmtDate(y, m, d, opts) { return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', Object.assign({ day: 'numeric', month: 'short', timeZone: 'UTC' }, opts || {})); }
+function fmtDoy(y, doy) { const t = HS.dateOfDoy(y, doy); return fmtDate(t.y, t.m, t.d); }
+function debounce(fn, ms) { let t = null; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+/* ============================ time zones ============================ */
+const fmtCache = new Map();
+function zoneOf(lat, lng) {
+  try { return typeof window.tzlookup === 'function' ? window.tzlookup(clamp(lat, -89.9, 89.9), ((lng + 540) % 360) - 180) : null; }
+  catch (e) { return null; }
+}
+function fmtTime(t, lat, lng) {
+  if (t == null) return '—';
+  const z = zoneOf(lat, lng);
+  if (z) {
+    try {
+      let f = fmtCache.get(z);
+      if (!f) { f = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: z }); fmtCache.set(z, f); }
+      return f.format(t);
+    } catch (e) { /* fall through */ }
+  }
+  const off = Math.round(lng / 15);
+  return new Date(t + off * HOUR).toISOString().slice(11, 16);
+}
+function zoneName(t, lat, lng, long) {
+  const z = zoneOf(lat, lng);
+  if (z) {
+    try {
+      const p = new Intl.DateTimeFormat('en-GB', { timeZone: z, timeZoneName: 'short' }).formatToParts(t).find(x => x.type === 'timeZoneName');
+      const abbr = (p ? p.value : z).replace('-', '−');
+      const city = /^Etc\//.test(z) ? '' : z.split('/').pop().replace(/_/g, ' ');
+      return long && city ? `${city} time (${abbr})` : abbr;
+    } catch (e) { /* fall through */ }
+  }
+  const off = Math.round(lng / 15);
+  return `UTC${off >= 0 ? '+' : '−'}${Math.abs(off)}, estimated`;
+}
+
+/* ============================ settings, URL and storage ============================ */
+function readParams() {
+  const out = {}, p = new URLSearchParams(location.hash.slice(1));
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(p.get('d') || '');
+  if (dm) out.date = [+dm[1], +dm[2], +dm[3]];
+  const ll = (p.get('ll') || '').split(',').map(Number);
+  if (ll.length === 2 && ll.every(isFinite)) out.ll = ll;
+  if (isFinite(+p.get('z')) && p.get('z')) out.z = +p.get('z');
+  for (const k of ['sky', 'lim', 'len', 'ter', 'bh']) if (p.get(k) && isFinite(+p.get(k))) out[k] = +p.get(k);
+  if (['framed', 'down'].includes(p.get('look'))) out.look = p.get('look');
+  if (['both', 'rise', 'set'].includes(p.get('m'))) out.mode = p.get('m');
+  if (p.get('t')) out.types = p.get('t');
+  out.test = p.has('test') || new URLSearchParams(location.search).has('test');
+  return out;
+}
+function store(key, val) { try { localStorage.setItem('hs2.' + key, JSON.stringify(val)); } catch (e) { /* private mode */ } }
+function recall(key) { try { return JSON.parse(localStorage.getItem('hs2.' + key) || 'null'); } catch (e) { return null; } }
+function applySettings(o) {
+  if (!o) return;
+  if (isFinite(o.sky)) S.sky = clamp(+o.sky, -1, 8);
+  if (isFinite(o.lim)) S.lim = clamp(+o.lim, 1, 10);
+  if (isFinite(o.bh)) S.bh = clamp(+o.bh, 5, 60);
+  if (o.look === 'framed' || o.look === 'down') S.look = o.look;
+  if (o.ter !== undefined && o.ter !== null) S.terrain = !!+o.ter;
+  if (isFinite(o.len)) S.minLen = clamp(+o.len, 50, 1000);
+  if (o.mode) S.mode = o.mode;
+  if (typeof o.types === 'string') for (const g in GROUP_KEY) S.types[g] = o.types.includes(GROUP_KEY[g]);
+}
+const writeHash = debounce(() => {
+  if (!map) return;
+  const c = map.getCenter().wrap(), t = Object.keys(GROUP_KEY).filter(g => S.types[g]).map(g => GROUP_KEY[g]).join('') || '-';
+  const h = `d=${S.y}-${pad(S.m)}-${pad(S.d)}&ll=${c.lat.toFixed(5)},${c.lng.toFixed(5)}&z=${map.getZoom().toFixed(2)}` +
+    `&m=${S.mode}&look=${S.look}&bh=${S.bh}&sky=${S.sky}&lim=${S.lim}&len=${S.minLen}&ter=${S.terrain ? 1 : 0}&t=${t}`;
+  try { history.replaceState(null, '', '#' + h); } catch (e) { /* ignore */ }
+  store('view', { lat: c.lat, lng: c.lng, z: +map.getZoom().toFixed(2) });
+  store('settings3', { look: S.look, bh: S.bh, sky: S.sky, lim: S.lim, len: S.minLen, mode: S.mode, types: t, ter: S.terrain ? 1 : 0 });
+}, 350);
+
+/* ============================ map (MapLibre + OpenFreeMap positron, Sitwell colours) ============================ */
+let map;
+function initMap(view) {
+  map = new maplibregl.Map({
+    container: 'map', style: 'https://tiles.openfreemap.org/styles/positron',
+    center: [view.lng, view.lat], zoom: view.z,
+    attributionControl: false, dragRotate: false, pitchWithRotate: false, maxPitch: 0, touchPitch: false
+  });
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+  const corner = PHONE() ? 'bottom-right' : 'top-right';
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), corner);
+  const geo = new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true, timeout: 12000 },
+    fitBoundsOptions: { maxZoom: 15 }, showAccuracyCircle: false });
+  map.addControl(geo, corner);
+  geo.on('geolocate', () => updateStatus());
+  geo.on('error', e => setStatus(`Couldn't get your location (${(e && e.message) || 'permission denied'}). Pan the map instead.`, 'err'));
+  map.addControl(new maplibregl.AttributionControl({ compact: true,
+    customAttribution: ['Streets via <a href="https://overpass-api.de" target="_blank" rel="noopener">Overpass API</a>',
+      'Elevation: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Terrain Tiles</a>'] }), 'bottom-left');
+  map.on('load', onStyleLoad);
+  map.on('error', e => {
+    const er = e && e.error, url = (er && er.url) || '';
+    if (!mapReady && /styles\/positron/.test(url)) showProblem(`The map style didn't load (${er.status ? 'HTTP ' + er.status : er.message}). Check the connection and reload.`);
+  });
+  setTimeout(() => { if (!mapReady) showProblem("The map style hasn't loaded after 25 seconds. Check the connection and reload."); }, 25000);
+  map.on('moveend', onViewChanged);
+  map.on('click', onMapClick);
+}
+function onStyleLoad() {
+  for (const l of map.getStyle().layers) {
+    const sl = l['source-layer'] || '';
+    try {
+      if (l.type === 'background') map.setPaintProperty(l.id, 'background-color', '#EEEAE2');
+      else if (sl === 'water' && l.type === 'fill') map.setPaintProperty(l.id, 'fill-color', '#C8DBE3');
+      else if (sl === 'waterway' && l.type === 'line') map.setPaintProperty(l.id, 'line-color', '#B9D0DA');
+      else if (sl === 'park' && l.type === 'fill') map.setPaintProperty(l.id, 'fill-color', '#D6E3CB');
+      else if (sl === 'landcover' && l.type === 'fill') map.setPaintProperty(l.id, 'fill-color', '#D9E4CF');
+      else if (sl === 'landuse' && l.type === 'fill') map.setPaintProperty(l.id, 'fill-color', '#E9E5DC');
+      else if (sl === 'building' && l.type === 'fill') map.setPaintProperty(l.id, 'fill-color', '#E3DED3');
+      else if (sl === 'poi' && l.type === 'symbol') map.setLayoutProperty(l.id, 'visibility', 'none');
+    } catch (e) { /* layer without that property */ }
+  }
+  // Our streets go above roads and below every label, so names stay readable over the highlights.
+  const firstSymbol = (map.getStyle().layers.find(l => l.type === 'symbol') || {}).id;
+  const empty = { type: 'FeatureCollection', features: [] };
+  map.addSource('hs-runs', { type: 'geojson', data: empty });
+  map.addSource('hs-sel', { type: 'geojson', data: empty });
+  map.addLayer({ id: 'hs-runs', type: 'line', source: 'hs-runs',
+    layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['-', 1, ['get', 'q']] },   // red on top
+    paint: { 'line-color': RAMP, 'line-opacity': 0.95, 'line-width': WIDTH(0) } }, firstSymbol);
+  map.addLayer({ id: 'hs-sel-casing', type: 'line', source: 'hs-sel', filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'line-cap': 'round' }, paint: { 'line-color': '#1b1a17', 'line-width': WIDTH(4) } }, firstSymbol);
+  map.addLayer({ id: 'hs-sel-line', type: 'line', source: 'hs-sel', filter: ['==', ['geometry-type'], 'LineString'],
+    layout: { 'line-cap': 'round' }, paint: { 'line-color': ['case', ['has', 'q'], RAMP, '#ffffff'], 'line-width': WIDTH(0) } }, firstSymbol);
+  map.addLayer({ id: 'hs-stand', type: 'circle', source: 'hs-sel', filter: ['==', ['geometry-type'], 'Point'],
+    paint: { 'circle-radius': 5.5, 'circle-color': '#ffffff', 'circle-stroke-color': '#1b1a17', 'circle-stroke-width': 2.2 } }, firstSymbol);
+  map.on('mouseenter', 'hs-runs', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'hs-runs', () => { map.getCanvas().style.cursor = ''; });
+  mapReady = true;
+  pushRuns(); pushSelected();
+}
+
+/* ============================ drawing (GeoJSON sources, only aligned streets) ============================ */
+const widthOf = run => WIDTHS[run.len < 200 ? 0 : run.len < 600 ? 1 : 2];
+const observerEnd = HS.observerEnd;         // the end you stand at to look along a direction
+function pushRuns() {
+  if (!mapReady || !BAND) return;
+  const feats = [];
+  for (let i = 0; i < RUNS.length; i++) {
+    const r = RUNS[i], e = r.ev; if (!e) continue;
+    feats.push({ type: 'Feature', properties: { q: Math.round(qOfB(e, bandsOf(r)[e.k]) * 1000) / 1000, w: widthOf(r) },
+      geometry: { type: 'LineString', coordinates: [[r.lon1, r.lat1], [r.lon2, r.lat2]] } });
+  }
+  map.getSource('hs-runs').setData({ type: 'FeatureCollection', features: feats });
+}
+function pushSelected() {
+  if (!mapReady) return;
+  const feats = [], s = selected;
+  if (s) {
+    const props = { w: s.ev ? widthOf(s) : 2.4 };
+    if (s.ev) props.q = Math.round(qOfB(s.ev, bandsOf(s)[s.ev.k]) * 1000) / 1000;
+    feats.push({ type: 'Feature', properties: props, geometry: { type: 'LineString', coordinates: [[s.lon1, s.lat1], [s.lon2, s.lat2]] } });
+    if (s.ev) {                          // mark where to stand
+      const look = s.ev.k ? s.theta + 180 : s.theta, end = observerEnd(s, look);
+      feats.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: end === 1 ? [s.lon1, s.lat1] : [s.lon2, s.lat2] } });
+    }
+  }
+  map.getSource('hs-sel').setData({ type: 'FeatureCollection', features: feats });
+}
+
+/* ============================ scoring ============================ */
+function recompute() {
+  if (!map) return;
+  const c = map.getCenter().wrap();
+  DAYP = HS.dayParams(S.y, S.m, S.d, c.lng); lastLon = c.lng;
+  BAND = { lo: HS.app2true(S.sky - HS.SD), hi: HS.app2true(S.sky + (S.look === 'framed' ? 6 : S.lim)), target: HS.app2true(S.sky + HS.SD) };
+  let n = 0;
+  for (const r of RUNS) {
+    r.ev = (S.types[r.group] !== false && r.len >= S.minLen) ? HS.bestEvent(r, DAYP, bandsOf(r), S.mode) : null;
+    if (r.ev) n++;
+  }
+  ALIGNED = n; updateTerrStatus();
+  pushRuns(); pushSelected(); updateDateUI(); updateSunPanel();
+  if (popup && selected) refreshPopup();
+  scheduleUpcoming();
+  writeHash();
+}
+
+/* ============================ panel ============================ */
+function updateDateUI() {
+  const iso = `${S.y}-${pad(S.m)}-${pad(S.d)}`;
+  if ($('date').value !== iso) $('date').value = iso;
+  const doy = $('doy'); doy.max = HS.daysIn(S.y); doy.value = HS.doyOf(S.y, S.m, S.d);
+  $('dateLabel').textContent = fmtDate(S.y, S.m, S.d, { weekday: 'short', year: 'numeric' });
+  const t = new Date(), u = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1);
+  const same = d => S.y === d.getFullYear() && S.m === d.getMonth() + 1 && S.d === d.getDate();
+  document.querySelectorAll('#presets button').forEach(b => b.classList.toggle('on', same(b.dataset.p === 'today' ? t : u)));
+}
+function updateSunPanel() {
+  const c = map.getCenter().wrap(), dp = HS.dayParams(S.y, S.m, S.d, c.lng);
+  const rs = HS.riseSet(dp, c.lat, c.lng);
+  const none = rs.polar === 'day' ? 'sun up all day' : rs.polar === 'night' ? 'sun down all day' : '—';
+  $('stRise').textContent = rs.rise ? fmtTime(rs.rise.t, c.lat, c.lng) : none;
+  $('stSet').textContent = rs.set ? fmtTime(rs.set.t, c.lat, c.lng) : (rs.polar ? '' : '—');
+  $('stZone').textContent = zoneName(dp.tr, c.lat, c.lng); $('stZone').title = zoneName(dp.tr, c.lat, c.lng, true);
+  $('roCount').textContent = RUNS.length ? ALIGNED.toLocaleString() : '—';
+  $('roText').textContent = `${ALIGNED === 1 ? 'street' : 'streets'} aligned on ${fmtDate(S.y, S.m, S.d, { weekday: 'short' })}`;
+  $('skyLabel').textContent = `${S.sky.toFixed(1)}°`; $('ceilLabel').textContent = `${S.lim.toFixed(1)}° above`; $('bhLabel').textContent = `${S.bh} m`;
+  $('lookHint').textContent = S.look === 'framed'
+    ? 'The sun sits at the far end of the street. Long streets need it lower: about 1.5° for a long avenue, up to 6° for a short lane.'
+    : `Any sun up to ${S.lim.toFixed(1)}° above the skyline, lighting the street lengthwise.`;
+  $('lenLabel').textContent = `${S.minLen} m`; $('rampHi').textContent = S.look === 'framed' ? "At the street's limit" : `${S.lim.toFixed(1)}° above it`;
+}
+
+/* ============================ terrain: hills measured for every street in view ============================ */
+// Mapzen Terrain Tiles on AWS (Terrarium PNGs): EU-DEM in Europe, SRTM elsewhere; free, no key.
+const DEM_URL = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+const DEM_KEEP = 80, DEM_DAYS = 180, DEM_LIMIT = 500;
+const demMem = new Map(), demPending = new Map();
+// Ray sampling lives in the shared core, so the app and the GitHub build measure hills identically.
+const TERR = HS.makeTerrain(key => demMem.get(key));
+const tileKeyAt = TERR.tileKeyAt, rayTiles = TERR.rayTiles, horizonAt = TERR.horizonAt, obsOf = HS.obsOf;
+async function decodePNG(buf) {
+  const blob = new Blob([buf], { type: 'image/png' });
+  let img;
+  try { img = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); }
+  catch (e) {
+    img = await new Promise((res, rej) => { const im = new Image(), u = URL.createObjectURL(blob);
+      im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('unreadable tile')); }; im.src = u; });
+  }
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0);
+  const px = ctx.getImageData(0, 0, 256, 256).data, el = new Float32Array(65536);
+  for (let i = 0; i < 65536; i++) el[i] = HS.terrarium(px[4 * i], px[4 * i + 1], px[4 * i + 2]);
+  return el;
+}
+function demLoad(key) {
+  if (demMem.has(key)) { const v = demMem.get(key); demMem.delete(key); demMem.set(key, v); return Promise.resolve(v); }
+  if (demPending.has(key)) return demPending.get(key);
+  const z = Math.floor(key / 4294967296), x = Math.floor(key / 65536) % 65536, y = key % 65536, name = `${z}/${x}/${y}`;
+  const p = (async () => {
+    let buf = await IDB.getDem(name);
+    if (!buf) {
+      const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 20000);
+      try { const r = await fetch(DEM_URL(z, x, y), { signal: ctrl.signal }); if (!r.ok) throw new Error('HTTP ' + r.status); buf = await r.arrayBuffer(); }
+      catch (e) { throw new Error(e.name === 'AbortError' ? 'timed out' : (e.message || 'failed')); }
+      finally { clearTimeout(timer); }
+      IDB.putDem(name, buf);
+    }
+    const el = await decodePNG(buf);
+    demMem.set(key, el); while (demMem.size > DEM_KEEP) demMem.delete(demMem.keys().next().value);
+    return el;
+  })();
+  demPending.set(key, p);
+  p.then(() => demPending.delete(key), () => demPending.delete(key));
+  return p;
+}
+async function ensureDem(keys) {                     // returns {failed, reason}
+  const miss = [...keys].filter(k => !demMem.has(k));
+  if (!miss.length) return { failed: 0, reason: '' };
+  const res = await Promise.allSettled(miss.map(demLoad)), bad = res.filter(r => r.status === 'rejected');
+  return { failed: bad.length, reason: bad.length ? bad[0].reason.message : '' };
+}
+function measureRun(run) {                         // both directions; tiles must already be loaded
+  const a = obsOf(run, 0), b = obsOf(run, 1), ha = horizonAt(a.lat, a.lon, a.look), hb = horizonAt(b.lat, b.lon, b.look);
+  if (!ha || !hb) return false;
+  run.tsky = [ha.ang, hb.ang]; run.tdist = [ha.dist, hb.dist];
+  return true;
+}
+// ---- every street in view, in the background ----
+let terrGen = 0, terrInfo = { done: 0, total: 0, err: '' }, terrBackoff = 0;
+const scheduleTerrain = debounce(() => terrainPass(), 300);
+async function terrainPass() {
+  const gen = ++terrGen;
+  if (!S.terrain || !mapReady || !RUNS.length) { updateTerrStatus(); return; }
+  if (Date.now() < terrBackoff) { updateTerrStatus(); return; }
+  const b = map.getBounds(), m = 0.003;
+  const inView = r => r.maxLat > b.getSouth() - m && r.minLat < b.getNorth() + m && r.maxLon > b.getWest() - m && r.minLon < b.getEast() + m;
+  const todo = RUNS.filter(r => r.tsky === undefined && S.types[r.group] !== false && r.len >= S.minLen);
+  todo.sort((p, q) => (inView(q) ? 1 : 0) - (inView(p) ? 1 : 0));          // streets in view first
+  const need = new Set();
+  for (const r of todo) for (const k of [0, 1]) { const o = obsOf(r, k); need.add(tileKeyAt(o.lat, o.lon, 12)); rayTiles(o.lat, o.lon, o.look, need); }
+  terrInfo = { done: 0, total: todo.length, err: '' }; updateTerrStatus();
+  if (!todo.length) { updateTerrStatus(); return; }
+  const got = await ensureDem(need);
+  if (gen !== terrGen) return;
+  if (got.failed) { terrInfo.err = got.reason; if (need.size && got.failed === need.size) terrBackoff = Date.now() + 30000; }
+  let i = 0, lastPush = performance.now();
+  while (i < todo.length) {
+    const t0 = performance.now();
+    while (i < todo.length && performance.now() - t0 < 20) { const r = todo[i++]; if (r.tsky === undefined) measureRun(r); terrInfo.done++; }
+    if (gen !== terrGen) return;
+    if (performance.now() - lastPush > 500) { recompute(); lastPush = performance.now(); }
+    await sleep(0);
+  }
+  recompute();
+}
+function updateTerrStatus() {
+  const el = $('terrStatus'); if (!el) return;
+  if (!S.terrain) { el.textContent = 'Hills are ignored: streets assume a flat horizon, or your minimum skyline.'; return; }
+  if (terrInfo.total && terrInfo.done < terrInfo.total) { el.innerHTML = `<span class="spin" aria-hidden="true"></span> Measuring hills: ${terrInfo.done.toLocaleString()} of ${terrInfo.total.toLocaleString()} streets…`; return; }
+  if (terrInfo.err && !RUNS.some(r => r.tsky)) { el.textContent = `Couldn't load elevation data (${terrInfo.err}). Streets assume a flat horizon.`; return; }
+  el.textContent = RUNS.some(r => r.tsky) ? 'Hills measured for all loaded streets.' + (terrInfo.err ? ' Some elevation tiles didn\'t load.' : '') : '';
+}
+// ---- the street you tap: both directions plus a fan for the sketch ----
+async function ensureRunTerrain(run) {
+  if (!S.terrain) return;
+  const obs = [obsOf(run, 0), obsOf(run, 1)], need = new Set();
+  for (const o of obs) { need.add(tileKeyAt(o.lat, o.lon, 12)); for (let i = -12; i <= 12; i++) rayTiles(o.lat, o.lon, (o.look + i + 360) % 360, need); }
+  const got = await ensureDem(need);
+  const fans = obs.map(o => { const f = []; for (let i = -12; i <= 12; i++) f.push(horizonAt(o.lat, o.lon, (o.look + i + 360) % 360)); return f; });
+  if (fans[0][12] && fans[1][12]) {
+    if (!run.tsky) { run.tsky = [fans[0][12].ang, fans[1][12].ang]; run.tdist = [fans[0][12].dist, fans[1][12].dist]; }
+    run._fan = fans.map((f, k) => ({ look: obs[k].look, ang: f.map(h => h ? h.ang : NaN) }));
+  } else if (run.tsky === undefined) { run.tsky = false; run._terrErr = got.reason || 'no elevation here'; }
+  if (selected === run) recompute();               // map and popup show the same answer
+}
+// ---- bands per street and direction (cached until the skyline, the limit or the terrain switch change) ----
+// How long the sun looks framed: while it sits at the far end of the street, below the buildings there.
+// From the straight length and an assumed building height; between 1.5° (about three sun widths, which also absorbs
+// a few tenths of a degree of uncertainty in refraction, horizon and map data) and 6° (where the light stops being golden).
+const framedLimit = r => clamp(Math.atan(S.bh / Math.max(r.len, 1)) * R2D, 1.5, 6);
+const limitOf = r => S.look === 'framed' ? framedLimit(r) : S.lim;
+let bandGen = 0;
+function bandsOf(r) {
+  const t = S.terrain && r.tsky ? r.tsky : null;
+  if (r._bg === bandGen && r._bt === t) return r._bands;
+  r._bg = bandGen; r._bt = t;
+  return (r._bands = [0, 1].map(k => {
+    const terr = t ? t[k] : null, sky = terr == null ? S.sky : Math.max(terr, S.sky > 0 ? S.sky : -Infinity), lim = limitOf(r);
+    return { sky, terr, lim, dist: t ? r.tdist[k] : 0, lo: HS.app2true(sky - HS.SD), hi: HS.app2true(sky + lim), target: HS.app2true(sky + HS.SD) };
+  }));
+}
+const qOfB = (e, b) => clamp((e.h - b.lo) / (b.hi - b.lo), 0, 1);
+const skyName = b => b.terr != null && b.sky === b.terr && b.terr > 0.3 ? (b.dist < 1000 ? 'top of the street' : 'hills') : (Math.abs(b.sky) < 0.05 ? 'horizon' : 'skyline');
+/* ============================ coming up: the best alignments in view, next 14 days ============================ */
+const UP_DAYS = 14, UP_MAX = 10;
+let UP = [];
+const scheduleUpcoming = debounce(() => { if (!anim) updateUpcoming(); }, 300);
+function updateUpcoming() {
+  const el = $('upcoming'); if (!el || !map || !BAND) return;
+  $('upFrom').textContent = `from ${fmtDate(S.y, S.m, S.d, { weekday: 'short' })}`;
+  if (!RUNS.length) { el.innerHTML = '<div class="hint">Streets appear here once they have loaded.</div>'; UP = []; return; }
+  const b = map.getBounds(), c = map.getCenter().wrap(), days = [];
+  for (let i = 0; i < UP_DAYS; i++) {
+    const t = new Date(Date.UTC(S.y, S.m - 1, S.d + i)), y = t.getUTCFullYear(), m = t.getUTCMonth() + 1, d = t.getUTCDate();
+    days.push({ y, m, d, dp: HS.dayParams(y, m, d, c.lng) });
+  }
+  const best = new Map(), evs = [];
+  for (const r of RUNS) {
+    if (S.types[r.group] === false || r.len < S.minLen) continue;
+    if (r.maxLat < b.getSouth() || r.minLat > b.getNorth() || r.maxLon < b.getWest() || r.minLon > b.getEast()) continue;
+    const bands = bandsOf(r);
+    for (const day of days) {
+      evs.length = 0;
+      if (S.mode !== 'set') HS.dirEvents(r, 0, day.dp, bands[0], evs);
+      if (S.mode !== 'rise') HS.dirEvents(r, 1, day.dp, bands[1], evs);
+      for (const e of evs) {
+        if ((S.mode === 'rise' && e.H >= 0) || (S.mode === 'set' && e.H < 0)) continue;
+        const bb = bands[e.k], rel = HS.true2app(e.h) - bb.sky;
+        // longer streets first; among them, the sun closest to resting whole on the skyline
+        const off = Math.min(1, Math.abs(rel - HS.SD) / Math.max(0.5, bb.lim));
+        const score = Math.log2(r.len / 50 + 1) * (1 - 0.6 * off);
+        const key = (r.name || `@${r.lat.toFixed(4)},${r.lon.toFixed(4)}`) + '|' + e.k;
+        const cur = best.get(key);
+        if (!cur || score > cur.score) best.set(key, { r, e, day, score, rel, q: qOfB(e, bb), name: skyName(bb) });
+      }
+    }
+  }
+  // parallel streets light up together (a grid): one entry per family, with its best street and how many others
+  // (grouped by direction within 2°, best candidate first, so no bin edge can split a grid in two)
+  const fams = [], dTheta = (x, y) => { const d = Math.abs(x - y) % 180; return d > 90 ? 180 - d : d; };
+  for (const c of [...best.values()].sort((p, q) => q.score - p.score)) {
+    const f = fams.find(f => f.e.k === c.e.k && dTheta(f.r.theta, c.r.theta) < 2);
+    if (f) f.more++; else fams.push(Object.assign(c, { more: 0 }));
+  }
+  UP = fams.slice(0, UP_MAX);
+  if (!UP.length) {
+    el.innerHTML = `<div class="hint">No ${S.look === 'framed' ? 'framed ' : ''}alignments in view in the next ${UP_DAYS} days.${S.look === 'framed' ? ' Try "Low sun along it", or zoom out.' : ' Try zooming out.'}</div>`;
+    return;
+  }
+  el.innerHTML = UP.map((u, i) => {
+    const rising = u.e.H < 0, look = u.e.k ? u.r.theta + 180 : u.r.theta;
+    const sun = u.rel < 0 ? `sun partly behind the ${u.name}` : u.rel < HS.SD ? `sun on the ${u.name}` : `sun ${u.rel.toFixed(1)}° above the ${u.name}`;
+    return `<button class="up" data-u="${i}"><span class="when"><i class="sw ${rising ? 'rise' : 'set'}"></i>${fmtDate(u.day.y, u.day.m, u.day.d, { weekday: 'short' })}, ${rising ? 'sunrise' : 'sunset'} ${fmtTime(u.e.t, u.r.lat, u.r.lon)}</span>` +
+      `<span class="what">${esc(u.r.name || 'Unnamed ' + hwLabel(u.r.hw).toLowerCase())}${u.more ? `<span class="fam"> and ${u.more} parallel street${u.more > 1 ? 's' : ''}</span>` : ''}</span>` +
+      `<span class="meta"><i class="qc" style="background:${rampCol(u.q)}"></i>${fmtLen(u.r.len)}, face ${HS.cardinal(look)}, ${sun}</span></button>`;
+  }).join('');
+}
+function goUpcoming(i) {
+  const u = UP[i]; if (!u) return;
+  if (PHONE()) { $('panel').classList.add('min'); $('collapse').textContent = '+'; $('collapse').setAttribute('aria-expanded', 'false'); }
+  setDate(u.day.y, u.day.m, u.day.d);
+  map.easeTo({ center: [u.r.lon, u.r.lat], zoom: Math.max(map.getZoom(), 15), duration: 600 });
+  map.once('moveend', () => openRun(u.r, { lng: u.r.lon, lat: u.r.lat }));
+}
+
+/* ============================ the street's sun calendar ============================ */
+function calendarFor(run, bands) {
+  const key = `${S.y}|${bands.map(b => b.lo.toFixed(4) + ',' + b.hi.toFixed(4)).join('|')}`;
+  if (run._calKey !== key) { run._cal = HS.runCalendar(run, S.y, bands); run._calKey = key; }
+  return run._cal;
+}
+function sunPhrase(e, b) {
+  const rel = HS.true2app(e.h) - b.sky, name = skyName(b);
+  if (rel < 0) return `the sun partly behind the ${name}`;
+  if (rel < HS.SD) return `the sun resting on the ${name}`;
+  return `the sun ${rel.toFixed(1)}° above the ${name}`;
+}
+function stripSVG(cal, bands) {
+  const W = 252, rh = 9, gap = 4, top = 2, N = cal.N, x = d => (d - 1) / N * W, P = [];
+  const H = top + 2 * rh + gap + 13;
+  P.push(`<svg class="strip" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Days in ${S.y} when this street lines up with the low sun. Tap to jump to a day.">`);
+  for (const k of [0, 1]) {
+    const y = top + k * (rh + gap);
+    P.push(`<rect x="0" y="${y}" width="${W}" height="${rh}" rx="2" fill="#f3f0ea"/>`);
+    P.push(`<rect x="0" y="${y}" width="2.5" height="${rh}" fill="${k ? '#9a4fb0' : '#e0892a'}"/>`);
+    for (let d = 1; d <= N; d++) {
+      const e = cal.days[k][d]; if (!e) continue;
+      P.push(`<rect x="${x(d).toFixed(1)}" y="${y}" width="${Math.max(1.2, W / N + 0.4).toFixed(2)}" height="${rh}" fill="${rampCol(qOfB(e, bands[k]))}"/>`);
+    }
+  }
+  const ly = top + 2 * rh + gap + 10;
+  'JFMAMJJASOND'.split('').forEach((l, i) => {
+    P.push(`<text x="${(x(HS.doyOf(S.y, i + 1, 1)) + 2).toFixed(1)}" y="${ly}" font-size="8" fill="#9a958b" font-family="IBM Plex Mono, monospace">${l}</text>`);
+  });
+  const sx = x(HS.doyOf(S.y, S.m, S.d)) + W / N / 2;
+  P.push(`<line x1="${sx.toFixed(1)}" y1="0" x2="${sx.toFixed(1)}" y2="${top + 2 * rh + gap + 1}" stroke="#1b1a17" stroke-width="1.4"/></svg>`);
+  return P.join('');
+}
+// The hills in the street's direction (±12°), the sun's path on the chosen day, and where it crosses the street.
+function sketchSVG(run, k, b, dp, ev) {
+  const f = run._fan[k], W = 252, H = 80, base = H - 12, look = f.look, ok = f.ang.filter(isFinite);
+  const hiT = Math.max(...ok), loT = Math.min(...ok), mid = isFinite(f.ang[12]) ? f.ang[12] : 0;
+  const yMax = Math.min(30, Math.max(4, hiT + 2.5, b.sky + S.lim + 1)), yMin = Math.min(-1, Math.floor(loT) - 0.5);
+  const X = az => ((((az - look + 540) % 360) - 180) + 12) / 24 * W, Y = a => base - (a - yMin) / (yMax - yMin) * (base - 4);
+  const col = k ? '#9a4fb0' : '#e0892a', cid = 'sk' + Math.random().toString(36).slice(2, 8), P = [];
+  P.push(`<svg class="sketch" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Skyline toward ${Math.round(look)} degrees with the sun's path">`);
+  P.push(`<defs><clipPath id="${cid}"><rect x="0" y="0" width="${W}" height="${base}" rx="4"/></clipPath></defs>`);
+  P.push(`<rect x="0" y="0" width="${W}" height="${base}" rx="4" fill="#f6f3ed"/><g clip-path="url(#${cid})">`);
+  P.push(`<line x1="0" x2="${W}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}" stroke="#ddd6c8" stroke-dasharray="2 3"/>`);
+  let seg = [], last = -1;
+  const flush = () => { if (seg.length > 1) P.push(`<polyline points="${seg.join(' ')}" fill="none" stroke="${col}" stroke-width="1.6" stroke-dasharray="1 2.5" stroke-linecap="round"/>`); seg = []; };
+  for (let i = 0, tt = dp.t0; tt <= dp.t1; tt += 60000, i++) {
+    const s = HS.altAz(tt, run.lat, run.lon), dAz = ((s.az - look + 540) % 360) - 180, a = HS.true2app(s.alt);
+    if (Math.abs(dAz) <= 12.5 && a > yMin - 3 && a < yMax + 3) { if (last !== i - 1) flush(); seg.push(`${X(s.az).toFixed(1)},${Y(a).toFixed(1)}`); last = i; }
+  }
+  flush();
+  let poly = `0,${base} `;
+  f.ang.forEach((a, i) => { poly += `${(i / 24 * W).toFixed(1)},${Y(Math.max(isFinite(a) ? a : yMin, yMin)).toFixed(1)} `; });
+  P.push(`<polygon points="${poly}${W},${base}" fill="#d9d1c3"/></g>`);
+  if (S.sky > 0 && S.sky > mid) P.push(`<line x1="0" x2="${W}" y1="${Y(S.sky).toFixed(1)}" y2="${Y(S.sky).toFixed(1)}" stroke="#b3aa9a" stroke-dasharray="4 3"/>`);
+  P.push(`<line x1="${W / 2}" x2="${W / 2}" y1="3" y2="${Y(mid).toFixed(1)}" stroke="#1b1a17" stroke-width="1.1"/>`);
+  if (ev) P.push(`<circle cx="${W / 2}" cy="${Y(HS.true2app(ev.h)).toFixed(1)}" r="4.6" fill="${col}" stroke="#fff" stroke-width="1.5"/>`);
+  const lab = (x, anchor, s, cl) => `<text x="${x}" y="${H - 2}" text-anchor="${anchor}" font-size="8.5" fill="${cl}" font-family="IBM Plex Mono, monospace">${s}</text>`;
+  P.push(lab(3, 'start', `${Math.round(look - 12 + 360) % 360}°`, '#9a958b'), lab(W / 2, 'middle', `street ${Math.round(look) % 360}° ${HS.cardinal(look)}`, '#1b1a17'), lab(W - 3, 'end', `${Math.round(look + 12) % 360}°`, '#9a958b'));
+  P.push(`<text x="${W - 4}" y="11" text-anchor="end" font-size="8.5" fill="#9a958b" font-family="IBM Plex Mono, monospace">${yMax.toFixed(0)}° up</text></svg>`);
+  return P.join('');
+}
+let popMore = false;
+function popupHTML(run) {
+  const bands = bandsOf(run), cal = calendarFor(run, bands), N = cal.N, doySel = HS.doyOf(S.y, S.m, S.d);
+  const name = run.name || `Unnamed ${hwLabel(run.hw).toLowerCase()}`;
+  const also = (run.names || []).filter(n => n && n !== run.name);
+  const P = [`<div class="pn">${esc(name)}</div>`, `<div class="pm">${esc(hwLabel(run.hw))}, ${fmtLen(run.len)} straight</div>`];
+  const dp = HS.dayParams(S.y, S.m, S.d, run.lon), evs = [];
+  HS.dirEvents(run, 0, dp, bands[0], evs); HS.dirEvents(run, 1, dp, bands[1], evs);
+  evs.sort((a, b) => a.t - b.t);
+  const day = [];
+  for (const e of evs) {
+    const rising = e.H < 0, look = e.k ? run.theta + 180 : run.theta;
+    day.push(`<p><i class="sw ${rising ? 'rise' : 'set'}"></i><b>${rising ? 'Sunrise' : 'Sunset'} at ${fmtTime(e.t, run.lat, run.lon)}</b>, with ${sunPhrase(e, bands[e.k])}. Stand at the ${word(look + 180)} end and face ${word(look)}.</p>`);
+  }
+  let nextK = null;
+  if (!evs.length) {
+    day.push(`<p class="none">No alignment on ${fmtDate(S.y, S.m, S.d)}.</p>`);
+    let next = null;
+    for (let i = 1; i <= N && !next; i++) {
+      const dd = ((doySel - 1 + i) % N) + 1;
+      for (const k of [0, 1]) { const e = cal.days[k][dd]; if (e && (!next || e.t < next.e.t)) next = { dd, e }; }
+    }
+    if (next) { nextK = next.e.k; day.push(`<p>Next: <a data-doy="${next.dd}">${fmtDoy(S.y, next.dd)}</a> at ${next.e.H < 0 ? 'sunrise' : 'sunset'}, ${fmtTime(next.e.t, run.lat, run.lon)}.</p>`); }
+  }
+  if (S.terrain && run.tsky === undefined) day.push('<p class="tnote"><span class="spin" aria-hidden="true"></span> Measuring the hills…</p>');
+  P.push(`<div class="pday">${day.join('')}</div>`);
+  P.push(stripSVG(cal, bands));
+  const wins = cal.windows.slice().sort((a, b) => a.from - b.from);
+  if (wins.length) {
+    P.push('<div class="wins">');
+    for (const w of wins) {
+      const best = w.lows.map(d => `<a data-doy="${d}">${fmtDoy(S.y, d)}</a> ${fmtTime(cal.days[w.k][d].t, run.lat, run.lon)}`).join(', ');
+      const range = w.from === w.to ? fmtDoy(S.y, w.from) : `${fmtDoy(S.y, w.from)} – ${fmtDoy(S.y, w.to)}`, rise = cal.days[w.k][w.from].H < 0;
+      P.push(`<div class="win"><span class="wk"><i class="sw ${rise ? 'rise' : 'set'}"></i>${rise ? 'Sunrise' : 'Sunset'}</span><span class="wr">${range}</span><span class="wb">${best}</span></div>`);
+    }
+    P.push('</div>');
+  } else P.push(`<div class="pf">This street never lines up with the low sun under the current settings.</div>`);
+  // everything else, on request
+  const k = evs.length ? evs[0].k : (nextK ?? 1), b = bands[k], t = S.terrain && run.tsky ? run.tsky : null, more = [];
+  if (t && run._fan) more.push(sketchSVG(run, k, b, dp, evs.find(e => e.k === k) || null));
+  else if (t && popMore) more.push('<p><span class="spin" aria-hidden="true"></span> Drawing the skyline…</p>');
+  if (t) {
+    const desc = kk => { const v = Math.abs(t[kk]) < 0.05 ? 0 : t[kk]; return `${v.toFixed(1)}° toward ${HS.cardinal(obsOf(run, kk).look)}${v > 0.3 ? (run.tdist[kk] < 1000 ? ", set by the street's own climb (approximate)" : `, hills ${fmtLen(run.tdist[kk])} away`) : ''}`; };
+    more.push(`<p>Measured skyline: ${desc(1)}; ${desc(0)}.</p>`);
+  } else if (S.terrain && run.tsky === false) more.push(`<p>Couldn't load elevation data (${esc(run._terrErr || 'failed')}), so this assumes a flat horizon.</p>`);
+  more.push(S.look === 'framed'
+    ? `<p>Counts as framed while the sun is within ${b.lim.toFixed(1)}° of the ${skyName(b)} at the far end, from ${fmtLen(run.len)} of straight street and ${S.bh} m buildings.</p>`
+    : `<p>Counts while the sun is within ${b.lim.toFixed(1)}° of the ${skyName(b)}.</p>`);
+  more.push(`<p>Bearing ${run.theta.toFixed(1)}° and ${(run.theta + 180).toFixed(1)}°${also.length ? `; continues as ${esc(also.slice(0, 2).join(', '))}` : ''}. Times are ${esc(zoneName(dp.tr, run.lat, run.lon, true))}. Linked dates have the whole sun resting on the skyline.${t ? ' Elevation from the Mapzen Terrain Tiles.' : ''}</p>`);
+  P.push(`<details class="pmore"${popMore ? ' open' : ''}><summary>More</summary>${more.join('')}</details>`);
+  return P.join('');
+}
+function ensurePopup() {
+  if (popup) return;
+  popBody = document.createElement('div');
+  popBody.addEventListener('click', ev => {
+    ev.stopPropagation();               // content is rebuilt on a date change; keep the click inside the popup
+    const a = ev.target.closest('[data-doy]');
+    if (a) { ev.preventDefault(); const d = +a.dataset.doy; setTimeout(() => jumpDoy(d), 0); return; }
+    const svg = ev.target.closest('svg.strip');
+    if (svg) { const r = svg.getBoundingClientRect(), N = HS.daysIn(S.y), d = clamp(Math.floor((ev.clientX - r.left) / r.width * N) + 1, 1, N); setTimeout(() => jumpDoy(d), 0); }
+  });
+  popBody.addEventListener('toggle', e => {                  // "More": remember it, and only then fetch elevation for the sketch
+    if (!e.target.classList || !e.target.classList.contains('pmore')) return;
+    popMore = e.target.open;
+    if (popMore && selected && S.terrain && !selected._fan) { refreshPopup(); ensureRunTerrain(selected).then(() => requestAnimationFrame(fitPopup)); }
+    requestAnimationFrame(fitPopup);
+  }, true);
+  popup = new maplibregl.Popup({ maxWidth: '300px', closeOnClick: false, focusAfterOpen: false, className: 'hs-pop', offset: 12 });
+  popup.setDOMContent(popBody);
+  popup.on('close', () => { selected = null; pushSelected(); });
+}
+function openRun(run, lngLat) {
+  selected = run;
+  if (run.tsky === false) run.tsky = undefined;                 // try again on a fresh tap
+  ensurePopup();
+  popBody.innerHTML = popupHTML(run);
+  popup.setLngLat(lngLat);
+  if (!popup.isOpen()) popup.addTo(map);
+  pushSelected();
+  requestAnimationFrame(fitPopup);
+  if (S.terrain && (run.tsky === undefined || (popMore && !run._fan))) ensureRunTerrain(run).then(() => requestAnimationFrame(fitPopup));
+}
+// Keep the popup clear of the panel and the screen edges by nudging the map.
+function fitPopup() {
+  const el = popup && popup.isOpen() && popup.getElement(); if (!el) return;
+  const r = el.getBoundingClientRect(), m = map.getContainer().getBoundingClientRect(), pr = $('panel').getBoundingClientRect();
+  // on phones the zoom and location buttons sit bottom-right, so stop above them
+  const top = (PHONE() ? pr.bottom : m.top) + 10, bottom = m.bottom - (PHONE() ? 112 : 30);
+  const left = (PHONE() ? m.left : Math.max(m.left, pr.right)) + 10, right = m.right - 10;
+  let dx = 0, dy = 0;
+  if (r.top < top) dy = r.top - top; else if (r.bottom > bottom) dy = Math.min(r.bottom - bottom, r.top - top);
+  if (r.left < left) dx = r.left - left; else if (r.right > right) dx = Math.min(r.right - right, r.left - left);
+  if (dx || dy) map.panBy([dx, dy], { duration: 250 });
+}
+function refreshPopup() { if (popup && popup.isOpen() && selected) popBody.innerHTML = popupHTML(selected); }
+function onMapClick(e) {
+  if (!RUNS.length) { if (popup) popup.remove(); return; }
+  const p = e.point, ll = e.lngLat.wrap(), lat = ll.lat, lng = ll.lng, tol = COARSE ? 16 : 9;
+  const mpp = 40075016.7 * Math.cos(lat * D2R) / (512 * Math.pow(2, map.getZoom()));
+  const dLat = tol * mpp / 111320 * 1.5, dLon = dLat / Math.max(0.2, Math.cos(lat * D2R));
+  let best = null, bestD = Infinity, bestA = false;
+  for (const run of RUNS) {
+    if (S.types[run.group] === false || run.len < S.minLen) continue;
+    if (lat < run.minLat - dLat || lat > run.maxLat + dLat || lng < run.minLon - dLon || lng > run.maxLon + dLon) continue;
+    const A = map.project([run.lon1, run.lat1]), B = map.project([run.lon2, run.lat2]);
+    const dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy;
+    const u = L2 ? clamp(((p.x - A.x) * dx + (p.y - A.y) * dy) / L2, 0, 1) : 0;
+    const d = Math.hypot(p.x - A.x - u * dx, p.y - A.y - u * dy);
+    if (d > tol) continue;
+    const al = !!run.ev;
+    if ((al && !bestA) || (al === bestA && d < bestD)) { best = run; bestD = d; bestA = al; }
+  }
+  if (best) openRun(best, e.lngLat); else if (popup) popup.remove();
+}
+
+/* ============================ date control ============================ */
+function setDate(y, m, d) { S.y = y; S.m = m; S.d = d; recompute(); }
+function jumpDoy(doy) { const t = HS.dateOfDoy(S.y, doy); setDate(t.y, t.m, t.d); }
+function stopAnim() {
+  if (!anim) return; cancelAnimationFrame(anim); anim = null; scheduleUpcoming();
+  $('play').innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+  $('play').setAttribute('aria-label', 'Play through the year');
+}
+function toggleAnim() {
+  if (anim) { stopAnim(); return; }
+  $('play').innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+  $('play').setAttribute('aria-label', 'Pause');
+  let last = 0;
+  const step = ts => {
+    if (ts - last >= 90) {
+      last = ts;
+      const N = HS.daysIn(S.y); let v = HS.doyOf(S.y, S.m, S.d) + 2; if (v > N) v = 1;
+      jumpDoy(v);
+    }
+    anim = requestAnimationFrame(step);
+  };
+  anim = requestAnimationFrame(step);
+}
+
+/* ============================ preloaded squares (built by the GitHub Action) ============================ */
+// Inside the preloaded countries, each map square is a small file of straight stretches with their hills measured.
+const DATA = 'data/v1/', COUNTRY_NAMES = { CH: 'Switzerland', HR: 'Croatia', SI: 'Slovenia', AT: 'Austria', IT: 'Italy', DE: 'Germany' };
+let coverage = null, covInfo = null;
+const PRE = new Map();                               // square key -> preloaded runs
+async function loadCoverage() {
+  try {
+    const r = await fetch(DATA + 'coverage.json', { cache: 'no-cache' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.t && j.z === TILE_Z) { coverage = new Map(Object.entries(j.t)); covInfo = { built: j.built, countries: j.countries || [] }; }
+  } catch (e) { /* no preloaded data here: every street comes from Overpass */ }
+  const el = $('covNote');
+  if (el && covInfo) {
+    const names = covInfo.countries.map(c => COUNTRY_NAMES[c] || c), list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0];
+    el.textContent = `Streets and hills for ${list} come preloaded (updated ${new Date(covInfo.built).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}). `;
+  }
+}
+const covered = key => !!coverage && coverage.has(key);
+const squareKeyOf = (lat, lng) => { const n = n2(); return `${((Math.floor(lon2tx(lng)) % n) + n) % n}/${Math.floor(lat2ty(lat))}`; };
+async function fetchSquare(t) {
+  const r = await fetch(`${DATA}s/${t.x}/${t.y}.json`);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+function ingestSquare(key, j) {
+  const bb = tileBBox(j.x, j.y), runs = [];
+  for (const a of j.r || []) {
+    const lon1 = bb.w + a[0] / 1e6, lat1 = bb.n - a[1] / 1e6, lon2 = bb.w + a[2] / 1e6, lat2 = bb.n - a[3] / 1e6;
+    const bg = HS.bearing(lon1, lat1, lon2, lat2), hw = HS.HW_LIST[a[4]] || 'road';
+    const run = HS.makeRun(lon1, lat1, lon2, lat2, bg.len, bg.az, a[5] >= 0 ? j.n[a[5]] : '', null, classify(hw), hw);
+    if (a[6] != null && a[7] != null) { run.tsky = [a[6] / 100, a[7] / 100]; run.tdist = [a[8] * 10, a[9] * 10]; }
+    runs.push(run);
+  }
+  PRE.set(key, runs);
+  const t = tiles.get(key) || { x: j.x, y: j.y }; t.st = 'done'; t.from = 'site'; t.wayIds = []; tiles.set(key, t);
+}
+async function loadSquares(keys) {
+  let i = 0;
+  const one = async () => {
+    while (i < keys.length) {
+      const key = keys[i++], t = tiles.get(key);
+      if (!t || t.st !== 'queued') continue;
+      t.st = 'loading';
+      try { ingestSquare(key, +coverage.get(key) > 0 ? await fetchSquare(t) : { x: t.x, y: t.y, n: [], r: [] }); }
+      catch (e) { t.st = 'failed'; t.err = e.message; lastErr = `preloaded square: ${e.message}`; }
+      scheduleRebuild(); updateStatus();
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, one));
+}
+
+/* ============================ tiles: plan, queue, fetch, cache ============================ */
+const n2 = () => Math.pow(2, TILE_Z);
+const lon2tx = lon => (lon + 180) / 360 * n2();
+const lat2ty = lat => { const r = clamp(lat, -85, 85) * D2R; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n2(); };
+function tileBBox(x, y) {
+  const n = n2();
+  return { w: x / n * 360 - 180, e: (x + 1) / n * 360 - 180,
+    n: Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * R2D, s: Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * R2D };
+}
+function viewTiles() {
+  const b = map.getBounds(), n = n2(), c = map.getCenter().wrap(), cx = lon2tx(c.lng), cy = lat2ty(c.lat);
+  const x0 = Math.floor(lon2tx(b.getWest())), x1 = Math.floor(lon2tx(b.getEast()));
+  const y0 = Math.floor(lat2ty(b.getNorth())), y1 = Math.floor(lat2ty(b.getSouth()));
+  const out = [];
+  for (let x = x0; x <= x1; x++) for (let y = Math.max(0, y0); y <= Math.min(n - 1, y1); y++) {
+    const xn = ((x % n) + n) % n;
+    out.push({ key: xn + '/' + y, x: xn, y, d: (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 });
+  }
+  return out.sort((a, b) => a.d - b.d);
+}
+function onViewChanged() {
+  writeHash();
+  if (lastLon == null || Math.abs(map.getCenter().wrap().lng - lastLon) > 1) recompute(); else { updateSunPanel(); scheduleUpcoming(); }
+  scheduleGeocode();
+  planTiles(false);
+  scheduleTerrain();
+}
+function planTiles(force) {
+  if (!map) return;
+  $('loadBtn').hidden = true; manualList = null;
+  const z = map.getZoom();
+  if (z < Z_HINT && !force) { dropQueued(new Set()); setStatus('Zoom in to a town or city to load its streets.'); return; }
+  const need = viewTiles(), needSet = new Set(need.map(t => t.key));
+  dropQueued(needSet);
+  const missing = need.filter(t => { const s = tiles.get(t.key); return !s || (force && s.st === 'failed'); });
+  if (!missing.length) { updateStatus(); return; }
+  if (force || (z >= Z_AUTO && missing.length <= AUTO_MAX)) { enqueue(missing.slice(0, MANUAL_MAX)); return; }
+  if (missing.length <= MANUAL_MAX) {
+    manualList = missing;
+    $('loadBtn').textContent = `Load streets in view (${missing.length} areas)`;
+    $('loadBtn').hidden = false;
+    updateStatus();
+    return;
+  }
+  setStatus(`This view covers ${missing.length} map areas. Zoom in to load its streets.`);
+}
+function dropQueued(keep) {
+  queue = queue.filter(k => { if (keep.has(k)) return true; const t = tiles.get(k); if (t && t.st === 'queued') tiles.delete(k); return false; });
+}
+function enqueue(list) {
+  const site = [];
+  for (const t of list) {
+    let s = tiles.get(t.key);
+    if (s && (s.st === 'done' || s.st === 'loading' || s.st === 'queued')) continue;
+    if (!s) tiles.set(t.key, s = { x: t.x, y: t.y });
+    s.st = 'queued'; s.err = null;
+    if (covered(t.key)) { site.push(t.key); continue; }      // preloaded: no Overpass
+    if (!queue.includes(t.key)) queue.push(t.key);
+  }
+  if (site.length) loadSquares(site);
+  const c = map.getCenter().wrap(), cx = lon2tx(c.lng), cy = lat2ty(c.lat);
+  queue.sort((a, b) => { const A = tiles.get(a), B = tiles.get(b); return ((A.x + .5 - cx) ** 2 + (A.y + .5 - cy) ** 2) - ((B.x + .5 - cx) ** 2 + (B.y + .5 - cy) ** 2); });
+  paused = false;
+  while (workers < WORKERS && queue.length) worker();
+  updateStatus();
+}
+async function worker() {
+  workers++;
+  try {
+    while (queue.length && !paused) {
+      const key = queue.shift(), t = tiles.get(key);
+      if (!t || t.st !== 'queued') continue;
+      t.st = 'loading'; updateStatus();
+      try {
+        let data = await cacheGet(key);
+        if (data) t.from = 'cache';
+        else {
+          data = await fetchTile(t);
+          t.from = 'net'; failStreak = 0;
+          cachePut(key, data);
+        }
+        if (!tiles.has(key)) continue;          // dropped while loading
+        ingest(key, data); t.st = 'done';
+      } catch (err) {
+        t.st = 'failed'; t.err = err.message; lastErr = err.message;
+        if (err.network && ++failStreak >= 2) paused = true;
+      }
+      scheduleRebuild(); updateStatus();
+    }
+  } finally { workers--; updateStatus(); }
+}
+function buildQuery(bb) {
+  return `[out:json][timeout:25];way["highway"]["highway"!~"^(${EXCLUDE_HW})$"]["area"!="yes"]` +
+    `["tunnel"!~"^(yes|building_passage|culvert|avalanche_protector|flooded)$"]["covered"!="yes"]["indoor"!="yes"]` +
+    `(${bb.s.toFixed(6)},${bb.w.toFixed(6)},${bb.n.toFixed(6)},${bb.e.toFixed(6)});out geom;`;
+}
+async function fetchJSON(url, body, timeout) {
+  const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const r = await fetch(url, { method: 'POST', body, signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+async function fetchTile(t) {
+  const body = 'data=' + encodeURIComponent(buildQuery(tileBBox(t.x, t.y))), errs = [];
+  for (let i = 0; i < MIRRORS.length; i++) {
+    const idx = (mirror + i) % MIRRORS.length, url = MIRRORS[idx];
+    try {
+      const j = await fetchJSON(url, body, 40000);
+      if (typeof j.remark === 'string' && /error|timed out|timeout|out of memory/i.test(j.remark)) throw new Error('server busy');
+      if (!Array.isArray(j.elements)) throw new Error('unexpected reply');
+      mirror = idx;
+      return parseOverpass(j);
+    } catch (e) {
+      const msg = e.name === 'AbortError' ? 'timed out' : (e.message || 'failed');
+      errs.push(`${hostOf(url)}: ${msg}`);
+      if (/429|busy/.test(msg) && i < MIRRORS.length - 1) await sleep(1500);
+    }
+  }
+  const err = new Error(errs.join('; ')); err.network = true; throw err;
+}
+function parseOverpass(j) {
+  const ways = [];
+  for (const el of j.elements || []) {
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+    const tg = el.tags || {};
+    if (!keepWay(tg)) continue;
+    const n = el.geometry.length, c = new Int32Array(2 * n);
+    let ok = true;
+    for (let i = 0; i < n; i++) {
+      const g = el.geometry[i]; if (!g) { ok = false; break; }
+      c[2 * i] = Math.round(g.lon * 1e7); c[2 * i + 1] = Math.round(g.lat * 1e7);
+    }
+    if (!ok) continue;
+    ways.push({ id: el.id, hw: tg.highway, name: tg.name || tg.ref || '',
+      ids: el.nodes && el.nodes.length === n ? Float64Array.from(el.nodes) : null, c });
+  }
+  return { ways };
+}
+function ingest(key, data) {
+  const t = tiles.get(key) || { st: 'done' }; t.wayIds = [];
+  for (const w of data.ways) {
+    t.wayIds.push(w.id);
+    const ex = WAYS.get(w.id);
+    if (ex) { ex.refs++; continue; }
+    const nw = { id: w.id, hw: w.hw, name: w.name, ids: w.ids, c: w.c, group: classify(w.hw), refs: 1 };
+    HS.prepWay(nw);                    // straight pieces now, so the rebuild after the last tile only stitches
+    WAYS.set(w.id, nw);
+  }
+  tiles.set(key, t);
+}
+function evictFar() {
+  const done = [...tiles.entries()].filter(([k, t]) => t.st === 'done' && !k.startsWith('file:'));
+  if (done.length <= KEEP_TILES) return false;
+  const c = map.getCenter().wrap(), cx = lon2tx(c.lng), cy = lat2ty(c.lat);
+  done.sort((a, b) => ((b[1].x - cx) ** 2 + (b[1].y - cy) ** 2) - ((a[1].x - cx) ** 2 + (a[1].y - cy) ** 2));
+  for (const [k, t] of done.slice(0, done.length - Math.floor(KEEP_TILES * 0.8))) {
+    for (const id of t.wayIds || []) { const w = WAYS.get(id); if (w && --w.refs <= 0) WAYS.delete(id); }
+    PRE.delete(k); tiles.delete(k);
+  }
+  return true;
+}
+let rebuildTimer = null;
+function scheduleRebuild() { clearTimeout(rebuildTimer); rebuildTimer = setTimeout(rebuild, workers ? 450 : 60); }
+const PERF = [];
+function rebuild() {
+  const t0 = performance.now();
+  evictFar();
+  const live = HS.buildRuns([...WAYS.values()]);
+  // live streets inside preloaded squares would duplicate the preloaded ones
+  const keepLive = coverage ? live.filter(r => !covered(squareKeyOf(r.lat, r.lon))) : live;
+  RUNS = PRE.size ? keepLive.concat(...PRE.values()) : keepLive;
+  const t1 = performance.now();
+  if (selected && !RUNS.includes(selected)) { selected = null; if (popup) popup.remove(); }
+  recompute(); updateStatus(); scheduleTerrain();
+  PERF.push({ ways: WAYS.size, runs: RUNS.length, build: +(t1 - t0).toFixed(1), score: +(performance.now() - t1).toFixed(1) });
+}
+
+/* ---- IndexedDB cache (validated tiles only; an error reply is never stored) ---- */
+const IDB = (() => {
+  let dbp = null, demPuts = 0;
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise(res => {
+      try {
+        const r = indexedDB.open('heliotropic-streets', 2);
+        r.onupgradeneeded = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('tiles')) db.createObjectStore('tiles', { keyPath: 'k' }).createIndex('ts', 'ts');
+          if (!db.objectStoreNames.contains('dem')) db.createObjectStore('dem', { keyPath: 'k' }).createIndex('ts', 'ts');
+        };
+        r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+      } catch (e) { res(null); }
+    });
+    return dbp;
+  }
+  const tx = async (store, mode, fn) => {
+    const db = await open(); if (!db) return null;
+    return new Promise(res => {
+      try { const t = db.transaction(store, mode), st = t.objectStore(store), out = fn(st); t.oncomplete = () => res(out && out.result !== undefined ? out.result : true); t.onerror = () => res(null); t.onabort = () => res(null); }
+      catch (e) { res(null); }
+    });
+  };
+  return {
+    get: k => tx('tiles', 'readonly', s => s.get(k)),
+    put: v => tx('tiles', 'readwrite', s => s.put(v)),
+    clear: () => Promise.all([tx('tiles', 'readwrite', s => s.clear()), tx('dem', 'readwrite', s => s.clear())]),
+    count: (store = 'tiles') => tx(store, 'readonly', s => s.count()),
+    async getDem(k) { const v = await tx('dem', 'readonly', s => s.get(k)); return v && v.buf && Date.now() - v.ts < DEM_DAYS * DAYMS ? v.buf : null; },
+    putDem(k, buf) { tx('dem', 'readwrite', s => s.put({ k, ts: Date.now(), buf })); if (++demPuts % 30 === 0) this.prune(DEM_LIMIT, 'dem'); },
+    async prune(limit, store = 'tiles') {
+      const db = await open(); if (!db) return;
+      const n = await this.count(store); if (!n || n <= limit) return;
+      let drop = n - Math.floor(limit * 0.85);
+      const t = db.transaction(store, 'readwrite'), st = t.objectStore(store);
+      st.index('ts').openKeyCursor().onsuccess = ev => {
+        const cur = ev.target.result; if (!cur || drop-- <= 0) return;
+        st.delete(cur.primaryKey); cur.continue();
+      };
+    }
+  };
+})();
+async function cacheGet(key) {
+  const v = await IDB.get(`${CACHE_VER}:${TILE_Z}/${key}`);
+  if (!v || !v.data || Date.now() - v.ts > CACHE_DAYS * DAYMS) return null;
+  return v.data;
+}
+let puts = 0;
+function cachePut(key, data) {
+  IDB.put({ k: `${CACHE_VER}:${TILE_Z}/${key}`, ts: Date.now(), data });
+  if (++puts % 25 === 0) IDB.prune(CACHE_LIMIT);
+}
+
+/* ---- status line ---- */
+function setStatus(msg, kind) {
+  const el = $('status');
+  el.className = 'status' + (kind === 'err' ? ' err' : '');
+  el.innerHTML = (kind === 'busy' ? '<span class="spin" aria-hidden="true"></span>' : '') + `<span>${esc(msg)}</span>`;
+}
+function updateStatus() {
+  let done = 0, cached = 0, site = 0, loading = 0, queued = 0, failed = 0;
+  const inView = map ? new Set(viewTiles().map(t => t.key)) : new Set();
+  for (const [k, t] of tiles) {
+    if (!inView.has(k)) continue;
+    if (t.st === 'done') { done++; if (t.from === 'cache') cached++; if (t.from === 'site') site++; }
+    else if (t.st === 'loading') loading++;
+    else if (t.st === 'queued') queued++;
+    else if (t.st === 'failed') failed++;
+  }
+  const busy = loading + queued;
+  $('retryBtn').hidden = !(paused || (failed && !busy));
+  if (paused) { setStatus(`OpenStreetMap servers aren't answering right now (${lastErr.slice(0, 140)}). Try again in a minute.`, 'err'); return; }
+  if (busy) { setStatus(`Loading streets: ${done} of ${done + busy + failed} map areas ready${cached ? `, ${cached} from this device` : ''}${failed ? `, ${failed} failed so far` : ''}…`, 'busy'); return; }
+  if (failed) { setStatus(`${failed} map area${failed > 1 ? 's' : ''} couldn't be loaded. ${lastErr ? '(' + lastErr.slice(0, 120) + ')' : ''}`, 'err'); return; }
+  if (manualList) { setStatus('This view is large. Load it, or zoom in to load automatically.'); return; }
+  if (map && map.getZoom() < Z_HINT) { setStatus('Zoom in to a town or city to load its streets.'); return; }
+  setStatus(done ? (site === done ? 'Streets loaded from the preloaded map.' : `Streets loaded for this view${site ? `, ${site} areas preloaded` : ''}${cached ? `, ${cached === done ? 'all' : cached} from this device` : ''}.`) : '');
+}
+
+/* ---- area name (Nominatim, sparing: only after real moves) ---- */
+let geoLast = null;
+const scheduleGeocode = debounce(async () => {
+  const c = map.getCenter().wrap();
+  if (map.getZoom() < Z_HINT - 1) { $('areaName').textContent = ''; return; }
+  if (geoLast && Math.hypot((c.lat - geoLast.lat) * 111, (c.lng - geoLast.lng) * 111 * Math.cos(c.lat * D2R)) < 3) return;
+  geoLast = { lat: c.lat, lng: c.lng };
+  try {
+    const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}`,
+      { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+    clearTimeout(t);
+    if (!r.ok) return;
+    const j = await r.json(), a = j.address || {};
+    $('areaName').textContent = a.city || a.town || a.village || a.municipality || a.county || a.state || j.name || '';
+  } catch (e) { /* the title is optional */ }
+}, 1200);
+
+/* ============================ controls ============================ */
+function bindControls() {
+  $('date').addEventListener('change', e => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e.target.value);
+    if (m) setDate(+m[1], +m[2], +m[3]);
+  });
+  $('doy').addEventListener('input', e => jumpDoy(+e.target.value));
+  $('presets').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const t = new Date(), d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + (b.dataset.p === 'tomorrow' ? 1 : 0));
+    setDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  });
+  $('play').addEventListener('click', toggleAnim);
+  $('upcoming').addEventListener('click', e => { const b = e.target.closest('[data-u]'); if (b) goUpcoming(+b.dataset.u); });
+  $('mode').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    S.mode = b.dataset.m; syncControls(); recompute();
+  });
+  $('sky').addEventListener('input', e => { S.sky = +e.target.value; bandGen++; recompute(); });
+  $('ceil').addEventListener('input', e => { S.lim = +e.target.value; bandGen++; recompute(); });
+  $('bh').addEventListener('input', e => { S.bh = +e.target.value; bandGen++; recompute(); });
+  $('look').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; S.look = b.dataset.l; bandGen++; syncControls(); recompute(); });
+  $('terrain').addEventListener('change', e => {
+    S.terrain = e.target.checked; bandGen++; writeHash(); recompute();
+    if (S.terrain) { scheduleTerrain(); if (selected && popup && popup.isOpen() && !selected._fan) ensureRunTerrain(selected); }
+  });
+  $('len').addEventListener('input', e => { S.minLen = +e.target.value; recompute(); scheduleTerrain(); });
+  const types = $('types');
+  for (const g of Object.keys(TYPE_GROUPS)) {
+    const l = document.createElement('label'); l.className = 'check';
+    l.innerHTML = `<input type="checkbox" data-g="${g}"> ${GROUP_LABEL[g]}`;
+    l.querySelector('input').addEventListener('change', e => { S.types[g] = e.target.checked; recompute(); scheduleTerrain(); });
+    types.appendChild(l);
+  }
+  $('loadBtn').addEventListener('click', () => { if (manualList) enqueue(manualList); manualList = null; $('loadBtn').hidden = true; });
+  $('retryBtn').addEventListener('click', () => { failStreak = 0; paused = false; planTiles(true); });
+  $('clearCache').addEventListener('click', async () => { await IDB.clear(); setStatus('Saved streets and elevation data cleared from this device.'); });
+  $('collapse').addEventListener('click', e => {
+    e.stopPropagation();
+    const p = $('panel'), min = p.classList.toggle('min');
+    $('collapse').textContent = min ? '+' : '–';
+    $('collapse').setAttribute('aria-expanded', String(!min));
+    $('collapse').setAttribute('aria-label', min ? 'Show settings' : 'Hide settings');
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && popup && popup.isOpen()) popup.remove();
+  });
+}
+function syncControls() {
+  $('sky').value = S.sky; $('ceil').value = S.lim; $('bh').value = S.bh; $('len').value = S.minLen; $('terrain').checked = S.terrain;
+  document.querySelectorAll('#look button').forEach(b => b.classList.toggle('on', b.dataset.l === S.look));
+  document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
+  document.querySelectorAll('#types input').forEach(i => { i.checked = S.types[i.dataset.g] !== false; });
+}
+
+/* ============================ self-test (?test) ============================ */
+const FIXTURES = [["Zagreb",45.8,16.0,3,20,89.377,270.91],["Zagreb",45.8,16.0,6,21,54.162,305.837],["Zagreb",45.8,16.0,12,21,123.755,236.243],["Zurich",47.377,8.54,12,21,124.865,235.133],["NYC",40.758,-73.985,6,21,57.476,302.522],["Singapore",1.35,103.82,6,21,66.532,293.469],["Reykjavik",64.13,-21.9,6,21,19.682,340.31],["Reykjavik",64.13,-21.9,12,21,151.854,208.144],["Sydney",-33.87,151.21,12,21,119.257,240.738],["BuenosAires",-34.6,-58.38,6,21,61.753,298.245],["Anchorage",61.2,-149.9,3,20,88.446,271.973],["Anchorage",61.2,-149.9,12,21,143.067,216.933]];
+async function runSelfTest() {
+  const out = [], ok = (name, pass, detail, net) => out.push({ name, pass, detail, net: !!net });
+  // 1) sun engine vs pyephem at the same -0.833° convention
+  let worst = 0;
+  for (const [, lat, lng, m, d, er, es] of FIXTURES) {
+    const rs = HS.riseSet(HS.dayParams(2026, m, d, lng), lat, lng);
+    worst = Math.max(worst, Math.abs(rs.rise.az - er), Math.abs(rs.set.az - es));
+  }
+  ok('Sunrise/sunset azimuths match pyephem (12 cases, 1° N to 64° N/S)', worst < 0.035, `worst ${worst.toFixed(3)}°`);
+  // 2) analytic crossing altitude vs brute-force scan
+  let wH = 0, miss = 0, cnt = 0;
+  for (let i = 0; i < 40; i++) {
+    const lat = -60 + 120 * ((i * 0.6180339) % 1), lng = -170 + 340 * ((i * 0.4142136) % 1), doy = 1 + (i * 37) % 365;
+    const dt = HS.dateOfDoy(2026, doy), dp = HS.dayParams(2026, dt.m, dt.d, lng), rs = HS.riseSet(dp, lat, lng);
+    if (!rs.set) continue;
+    const beta = rs.set.az - 3 + (i % 7), run = HS.probeRun(lat, lng, beta % 180);
+    const evs = HS.dirEvents(run, 1, dp, { lo: -1.5, hi: 12 }, []);
+    let pt = dp.tr, pa = HS.altAz(pt, lat, lng).az;
+    for (let t = dp.tr + 20000; t <= dp.t1; t += 20000) {
+      const a = HS.altAz(t, lat, lng), s1 = ((pa - beta + 540) % 360) - 180, s2 = ((a.az - beta + 540) % 360) - 180;
+      if (Math.abs(s1) < 30 && s1 < 0 && s2 >= 0 && a.alt > -1.4 && a.alt < 11.9) {
+        let lo = pt, hi = t;
+        for (let q = 0; q < 30; q++) { const md = (lo + hi) / 2; if (((HS.altAz(md, lat, lng).az - beta + 540) % 360) - 180 < 0) lo = md; else hi = md; }
+        const alt = HS.altAz(hi, lat, lng).alt;
+        cnt++; const m = evs.find(e => Math.abs(e.t - hi) < 10 * 60000);
+        if (!m) miss++; else wH = Math.max(wH, Math.abs(m.h - alt));
+      }
+      pt = t; pa = a.az;
+    }
+  }
+  ok('Crossing-altitude solver matches a brute-force scan', miss === 0 && cnt > 5 && wH < 0.03, `${cnt} events, worst ${wH.toFixed(3)}°, ${miss} missed`);
+  // 3) Manhattanhenge 2026 (Hayden Planetarium: 28 May 20:14, 29 May 20:13, 11 Jul 20:20, 12 Jul 20:21 EDT)
+  const nyc = HS.probeRun(40.758, -73.985, 119), hay = [[5, 28, 20 * 60 + 14], [5, 29, 20 * 60 + 13], [7, 11, 20 * 60 + 20], [7, 12, 20 * 60 + 21]];
+  let mOK = true, mDet = [];
+  for (const [m, d, mins] of hay) {
+    const e = HS.dirEvents(nyc, 1, HS.dayParams(2026, m, d, -73.985), { lo: -1, hi: 3 }, [])[0];
+    if (!e) { mOK = false; mDet.push(`${d}/${m}: none`); continue; }
+    const local = new Date(e.t - 4 * HOUR), lm = local.getUTCHours() * 60 + local.getUTCMinutes();
+    if (Math.abs(lm - mins) > 3 || e.h < -0.2 || e.h > 0.8) mOK = false;
+    mDet.push(`${d}/${m} ${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}, ${e.h.toFixed(2)}°`);
+  }
+  ok('Manhattanhenge 2026 evenings land within 3 min of the published times', mOK, mDet.join('; '));
+  // 4) straight runs
+  const k = (lat, lon, pts, ids) => ({ id: Math.random(), hw: 'residential', group: 'Residential', name: '', ids,
+    c: Int32Array.from(pts.flatMap(([x, y]) => [Math.round((lon + x / HS.kLon(lat)) * 1e7), Math.round((lat + y / HS.kLat(lat)) * 1e7)])) });
+  const line = (x0, y0, az, len, step) => { const o = []; for (let s = 0; s < len - 1e-9; s += step) o.push([x0 + Math.sin(az * D2R) * s, y0 + Math.cos(az * D2R) * s]); o.push([x0 + Math.sin(az * D2R) * len, y0 + Math.cos(az * D2R) * len]); return o; };
+  HS.resetRunCache();
+  const r1 = HS.buildRuns([k(47.37, 8.54, line(0, 0, 62, 800, 70), null)]);
+  const a = line(0, 0, 90, 400, 40), b = line(400, 0, 90, 400, 40), st = line(400, 0, 0, 300, 30);
+  const ia = a.map((_, i) => 1e6 + i), ib = b.map((_, i) => 2e6 + i), is = st.map((_, i) => 3e6 + i); ib[0] = ia[ia.length - 1]; is[0] = ia[ia.length - 1];
+  const r2 = HS.buildRuns([k(47.37, 8.54, a, ia), k(47.37, 8.54, b, ib), k(47.37, 8.54, st, is)]);
+  HS.resetRunCache();
+  ok('Straight 800 m street with a node every 70 m becomes one stretch', r1.length === 1 && Math.abs(r1[0].len - 800) < 2 && Math.abs(r1[0].theta - 62) < 0.1, r1.map(r => `${r.len.toFixed(0)} m @ ${r.theta.toFixed(2)}°`).join(', '));
+  ok('Through street at a T-junction merges, the side street stays separate', r2.length === 2 && r2.some(r => Math.abs(r.len - 800) < 2), r2.map(r => `${r.len.toFixed(0)} m`).join(', '));
+  // 5) time zones (needs the lookup script)
+  for (let i = 0; i < 50 && typeof window.tzlookup !== 'function'; i++) await sleep(100);
+  if (typeof window.tzlookup === 'function') {
+    const tp = HS.riseSet(HS.dayParams(2026, 6, 21, 2.352), 48.857, 2.352), tl = HS.riseSet(HS.dayParams(2026, 12, 21, -0.128), 51.507, -0.128);
+    const p = fmtTime(tp.rise.t, 48.857, 2.352), l = fmtTime(tl.rise.t, 51.507, -0.128);
+    ok('Local clock times: Paris 21 Jun sunrise 05:46, London 21 Dec 08:03', /^05:4[67]$/.test(p) && /^08:0[34]$/.test(l), `Paris ${p}, London ${l}`, true);
+  } else ok('Local clock times: Paris 21 Jun sunrise 05:46, London 21 Dec 08:03', false, 'time-zone lookup did not load', true);
+  // 6) a street's calendar: two windows per event
+  const z70 = HS.probeRun(45.8, 16.0, 70), band = { lo: HS.app2true(-HS.SD), hi: HS.app2true(3), target: HS.app2true(HS.SD) };
+  const cal = HS.runCalendar(z70, 2026, band), peaks = cal.windows.map(w => w.lows[0]).sort((x, y) => x - y);
+  const expect = [HS.doyOf(2026, 2, 11), HS.doyOf(2026, 4, 26), HS.doyOf(2026, 8, 16), HS.doyOf(2026, 10, 30)];
+  ok('A 70° street in Zagreb gets two sunrise and two sunset windows', peaks.length === 4 && peaks.every((p, i) => Math.abs(p - expect[i]) <= 2), peaks.map(d => fmtDoy(2026, d)).join(', '));
+  // 7) terrain geometry: a ridge 5 km away, a mountain at 80 km (Earth's curve), a street climbing 30 m
+  {
+    const D = HS.RAY_D, eye = 400 + HS.EYE, curve = d => d * d * 0.87 / (2 * 6371008.8);
+    const r1 = HS.rayHorizon(D, D.map(d => 400 + 461 * Math.exp(-(((d - 5080) / 300) ** 2))), eye), e1 = Math.atan2(861 - eye - curve(5080), 5080) * R2D;
+    const r2 = HS.rayHorizon(D, D.map(d => 400 + 2600 * Math.exp(-(((d - 80000) / 2000) ** 2))), eye), e2 = Math.atan2(3000 - eye - curve(80000), 80000) * R2D;
+    const r3 = HS.rayHorizon(D, D.map(d => 400 + Math.min(d, 300) * 0.1), eye), e3 = Math.atan2(430 - eye, 300) * R2D;
+    ok('Horizon geometry: ridge at 5 km, mountain at 80 km, a street climbing 30 m', Math.abs(r1.ang - e1) < 0.08 && Math.abs(r2.ang - e2) < 0.03 && Math.abs(r3.ang - e3) < 0.3,
+      `ridge ${r1.ang.toFixed(2)}° vs ${e1.toFixed(2)}°, mountain ${r2.ang.toFixed(2)}° vs ${e2.toFixed(2)}°, climb ${r3.ang.toFixed(2)}° vs ${e3.toFixed(2)}°`);
+  }
+  // 8) live elevation data: Uetliberg seen from Zurich HB (bare earth, about 5.2°)
+  try {
+    const hb = { lat: 47.3779, lon: 8.5403 }, az = 231.6, need = new Set([tileKeyAt(hb.lat, hb.lon, 12)]);
+    rayTiles(hb.lat, hb.lon, az, need);
+    const got = await ensureDem(need), hz = horizonAt(hb.lat, hb.lon, az);
+    if (!hz) throw new Error(got.reason ? 'elevation tiles: ' + got.reason : 'no elevation data');
+    ok('Live elevation data: Uetliberg from Zurich HB is about 5.2°', hz.ang > 4.6 && hz.ang < 5.8, `${hz.ang.toFixed(2)}°, ${fmtLen(hz.dist)} away`, true);
+  } catch (e) { ok('Live elevation data: Uetliberg from Zurich HB is about 5.2°', false, e.message, true); }
+  {
+    const keep = S.bh; S.bh = 15;
+    const f = L => framedLimit({ len: L }), v = [f(1000), f(150), f(50), f(5000)];
+    S.bh = keep;
+    ok('Framing limit from length: 150 m lane ~5.7°, long avenues 1.5°, never above 6°', v[0] === 1.5 && Math.abs(v[1] - 5.71) < 0.05 && v[2] === 6 && v[3] === 1.5,
+      v.map(x => x.toFixed(2) + '°').join(', '));
+  }
+  {
+    const keep = S.bh; S.bh = 15;
+    const mh = HS.probeRun(40.758, -73.985, 119); mh.len = 3000;              // a Manhattan cross street, looking WNW
+    const band = { lo: HS.app2true(-HS.SD), hi: HS.app2true(framedLimit(mh)) };
+    S.bh = keep;
+    const on = (m, d) => HS.dirEvents(mh, 1, HS.dayParams(2026, m, d, -73.985), band, []).length > 0;
+    const res = [[5, 28], [5, 29], [7, 11], [7, 12]].map(([m, d]) => on(m, d)), mid = on(6, 16);
+    ok('"Framed at the end" catches all four Manhattanhenge 2026 evenings, not mid-June', res.every(Boolean) && !mid,
+      `28 May ${res[0] ? 'yes' : 'no'}, 29 May ${res[1] ? 'yes' : 'no'}, 11 Jul ${res[2] ? 'yes' : 'no'}, 12 Jul ${res[3] ? 'yes' : 'no'}, 16 Jun ${mid ? 'yes' : 'no'}`);
+  }
+  const pass = out.filter(x => x.pass).length, el = $('testOut');
+  el.innerHTML = `<button id="testClose" class="linkbtn" style="float:right">Close</button><h3>Self-test: ${pass} of ${out.length} passed</h3><ul>${out.map(x => `<li class="${x.pass ? 'ok' : 'bad'}">${x.pass ? '✓' : '✗'} ${esc(x.name)} <span style="color:#9a958b">(${esc(x.detail)})</span></li>`).join('')}</ul>`;
+  el.hidden = false;
+  $('testClose').addEventListener('click', () => { el.hidden = true; });
+  window.__selftest = out;
+  console.table(out);
+}
+
+/* ============================ start ============================ */
+function showProblem(msg) { const el = $('problem'); if (!el) return; el.textContent = msg; el.hidden = false; }
+window.addEventListener('error', e => { if (e && e.message) showProblem(`Something went wrong: ${e.message}${e.lineno ? ` (line ${e.lineno})` : ''}`); });
+window.addEventListener('unhandledrejection', e => { const r = e && e.reason; showProblem(`Something went wrong: ${(r && r.message) || r}`); });
+const ML_FALLBACK = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl';
+function loadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error(`couldn't download ${hostOf(src)}`)); document.head.appendChild(s); });
+}
+async function ensureMapLibre() {                // unpkg first (as in Sitwell); jsDelivr if that didn't arrive
+  if (window.maplibregl) return;
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = ML_FALLBACK + '.css'; document.head.appendChild(css);
+  try { await loadScript(ML_FALLBACK + '.js'); } catch (e) { /* reported below */ }
+  if (!window.maplibregl) throw new Error('the map library (MapLibre) did not download from unpkg or jsDelivr');
+}
+async function init() {
+  const prm = readParams(), view = recall('view');
+  applySettings(recall('settings3'));
+  applySettings(prm);
+  if (prm.date) { S.y = prm.date[0]; S.m = prm.date[1]; S.d = prm.date[2]; }
+  const v = prm.ll ? { lat: prm.ll[0], lng: prm.ll[1], z: prm.z || 14 } : (view && isFinite(view.lat) && isFinite(view.lng) ? view : DEFAULT_VIEW);
+  // the panel works before (and without) the map
+  bindControls(); syncControls(); updateDateUI();
+  window.__hsReady = true;                       // the app's script ran: the watchdog stays quiet
+  if (PHONE()) $('panel').classList.add('min'), $('collapse').textContent = '+', $('collapse').setAttribute('aria-expanded', 'false');
+  try {
+    await ensureMapLibre();
+    initMap({ lat: v.lat, lng: v.lng, z: clamp(+v.z || DEFAULT_VIEW.z, 2, 19) });
+  } catch (e) {
+    try { const j = JSON.parse(e.message); if (j && j.message) e = new Error(`${j.message}${j.statusMessage ? ' (' + j.statusMessage + ')' : ''}`); } catch (x) { /* plain message */ }
+    const gl = /webgl|context/i.test(e.message || '');
+    showProblem(`The map couldn't start: ${e.message}. ` + (gl
+      ? 'The browser refused the graphics (WebGL) the map needs. Closing some tabs or restarting the browser usually fixes it.'
+      : 'Check the connection and reload the page.'));
+    console.error(e);
+    return;
+  }
+  recompute();
+  await loadCoverage();
+  planTiles(false);
+  scheduleGeocode();
+  if (prm.test) runSelfTest();
+}
+init().catch(e => showProblem(`Startup failed: ${e.message}`));
+return { perf: PERF, onTzReady() { if (map && BAND) { updateSunPanel(); refreshPopup(); } }, state: S, get runs() { return RUNS; }, map: () => map, runSelfTest, openRun };
+})();
+
+</script>
+<script>window.__hsEOF = true;</script>
+</body>
+</html>
+<!-- Heliotropic Streets, version 3.3. If you can read this line, the file is complete. -->
