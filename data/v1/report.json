@@ -1,0 +1,39 @@
+{
+ "countries": [
+  {
+   "code": "CH",
+   "name": "Switzerland",
+   "streetLines": 2034043,
+   "stretches": 663410,
+   "kept": 584061,
+   "neverAligned": 79343,
+   "withoutHills": 0
+  },
+  {
+   "code": "HR",
+   "name": "Croatia",
+   "streetLines": 600881,
+   "stretches": 516599,
+   "kept": 385752,
+   "neverAligned": 130846,
+   "withoutHills": 0
+  },
+  {
+   "code": "SI",
+   "name": "Slovenia",
+   "streetLines": 509086,
+   "stretches": 383194,
+   "kept": 301581,
+   "neverAligned": 74107,
+   "withoutHills": 0
+  }
+ ],
+ "built": "2026-11-01T09:46:48.105Z",
+ "squaresCovered": 11558,
+ "squaresWithStreets": 9949,
+ "megabytes": 61.8,
+ "demDownloaded": 0,
+ "demFromCache": 3761,
+ "demMissing": 0,
+ "minutes": 3.6
+}
